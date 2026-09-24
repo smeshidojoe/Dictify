@@ -34,9 +34,21 @@ else:
     binaries += collect_dynamic_libs("ctranslate2")
     hiddenimports += ["faster_whisper"]
 
+# Keep the bundle to what Dictify imports, even when built from a Python that has more
+# installed (a global interpreter with PyQt, Jupyter, ML stacks...). PyInstaller aborts
+# outright if it sees more than one Qt binding, so all but PySide6 are excluded.
 excludes = [
-    "torch", "numba", "llvmlite", "scipy", "tkinter", "matplotlib", "pandas", "IPython",
-    "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtWebEngineCore", "PySide6.Qt3DCore",
+    # other Qt bindings
+    "PyQt5", "PyQt6", "PySide2", "qtpy", "sip",
+    # not used by Dictify (mlx_whisper word timing uses dictify.align instead of numba/scipy)
+    "torch", "torchaudio", "torchvision", "tensorflow", "keras", "jax",
+    "numba", "llvmlite", "scipy", "sklearn", "pandas", "matplotlib", "cv2", "sympy",
+    "IPython", "jupyter", "jupyter_client", "jupyter_core", "ipykernel", "notebook", "nbformat",
+    "tkinter", "_tkinter", "pytest",
+    # unused parts of PySide6
+    "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtQuickWidgets", "PySide6.QtWebEngineCore",
+    "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore", "PySide6.QtCharts", "PySide6.QtDataVisualization",
+    "PySide6.QtBluetooth", "PySide6.QtSql", "PySide6.QtTest", "PySide6.QtDesigner",
 ]
 
 a = Analysis(
