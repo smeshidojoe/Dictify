@@ -6,6 +6,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
     QLabel,
+    QSizePolicy,
     QSlider,
     QStyle,
     QStyleOptionSlider,
@@ -117,7 +118,8 @@ class DropZone(QAbstractButton):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(230)
+        self.setMinimumHeight(200)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._hover_drag = False
 
     def dragEnterEvent(self, e):
@@ -173,6 +175,53 @@ class DropZone(QAbstractButton):
     def leaveEvent(self, e):
         self.update()
         super().leaveEvent(e)
+
+
+class DropOverlay(QWidget):
+    """Translucent dashed frame shown over the text while a file is dragged onto it."""
+
+    fileDropped = Signal(str)
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.hide()
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+
+    def dragMoveEvent(self, e):
+        e.acceptProposedAction()
+
+    def dragLeaveEvent(self, _e):
+        self.hide()
+
+    def dropEvent(self, e):
+        self.hide()
+        urls = [u for u in e.mimeData().urls() if u.isLocalFile()]
+        if urls:
+            e.acceptProposedAction()
+            self.fileDropped.emit(urls[0].toLocalFile())
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        veil = theme.c("bg")
+        veil.setAlpha(225)
+        p.fillRect(self.rect(), veil)
+        r = QRectF(self.rect()).adjusted(16, 16, -16, -16)
+        pen = QPen(theme.c("accent"), 2, Qt.PenStyle.DashLine)
+        pen.setDashPattern([4, 4])
+        p.setPen(pen)
+        p.setBrush(theme.c("accent_soft"))
+        p.drawRoundedRect(r, 16, 16)
+        f = QFont(self.font())
+        f.setPointSizeF(f.pointSizeF() * 1.25)
+        f.setWeight(QFont.Weight.DemiBold)
+        p.setFont(f)
+        p.setPen(theme.c("text"))
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, tr("Drop the file to transcribe it"))
 
 
 class Toast(QLabel):

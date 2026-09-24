@@ -205,3 +205,21 @@ def test_edit_drops_word_timings_of_that_segment(qapp, transcript):
     ed.sync()
     assert transcript.segments[0].words == []
     assert transcript.segments[1].words != []
+
+
+def test_highlights_current_word(qapp, transcript):
+    from dictify.model import build_words
+
+    text, words = build_words([(" I", 12.0, 12.2), (" love", 12.2, 12.6), (" working", 12.6, 13.0),
+                               (" with", 13.0, 13.2), (" people.", 13.2, 14.0)])
+    transcript.segments[2].text, transcript.segments[2].words = text, words
+    ed = make(qapp, transcript)
+    ed.set_editing(False)
+    assert ed.set_current(2, 1) is True
+    sel = ed.extraSelections()
+    assert len(sel) == 1 and sel[0].cursor.selectedText() == "love"
+    ed.set_current(2, 4)
+    assert ed.extraSelections()[0].cursor.selectedText() == "people."
+    # no word timings -> whole segment
+    ed.set_current(3, None)
+    assert ed.extraSelections()[0].cursor.selectedText().strip() == "I was a teacher."

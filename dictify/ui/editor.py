@@ -71,6 +71,8 @@ class TranscriptEditor(QTextEdit):
         self._dirty = False
         self._editing = False
         self._current: int | None = None
+        self._current_key: tuple = (None, None)
+        self._cur_pos: int | None = None
         self._cur_sels: list = []
         self._search_sels: list = []
         self._query = ""
@@ -164,6 +166,8 @@ class TranscriptEditor(QTextEdit):
         self._index = None
         self._dirty = False
         self._current = None
+        self._current_key = (None, None)
+        self._cur_pos = None
         self._cur_sels = []
         self.verticalScrollBar().setValue(scroll)
         if self._query:
@@ -249,25 +253,52 @@ class TranscriptEditor(QTextEdit):
 
     # ----- playback highlight --------------------------------------------------
 
-    def set_current(self, sid: int | None) -> bool:
-        if sid == self._current:
+    def doc_pos(self, sid: int, offset: int) -> int | None:
+        """Document position of character `offset` of segment `sid` (inverse of offset_in_segment)."""
+        for start, end in self._ensure_index()[3].get(sid, []):
+            if offset <= end - start:
+                return start + offset
+            offset -= end - start
+        return None
+
+    def _word_range(self, sid: int, k: int) -> tuple[int, int] | None:
+        if self._dirty or self._t is None:  # unsynced edits: word offsets may be stale
+            return None
+        seg = self._t.segments[sid]
+        if not 0 <= k < len(seg.words):
+            return None
+        start = seg.words[k].offset
+        end = seg.words[k + 1].offset if k + 1 < len(seg.words) else len(seg.text)
+        end = start + len(seg.text[start:end].rstrip())
+        a, b = self.doc_pos(sid, start), self.doc_pos(sid, end)
+        return (a, b) if a is not None and b is not None and b > a else None
+
+    def set_current(self, sid: int | None, word: int | None = None) -> bool:
+        """Highlights the word being spoken, or the whole segment when word timings are
+        unknown. Returns True when the highlight moved."""
+        if (sid, word) == self._current_key:
             return False
+        self._current_key = (sid, word)
         self._current = sid
         self._cur_sels = []
+        self._cur_pos = None
         if sid is not None:
+            rng = self._word_range(sid, word) if word is not None else None
             fmt = QTextCharFormat()
-            fmt.setBackground(theme.c("current"))
-            for s, e in self._ensure_index()[3].get(sid, []):
-                self._cur_sels.append(self._selection(s, e, fmt))
+            fmt.setBackground(theme.c("current_word" if rng else "current"))
+            ranges = [rng] if rng else self._ensure_index()[3].get(sid, [])
+            for a, b in ranges:
+                self._cur_sels.append(self._selection(a, b, fmt))
+            if ranges:
+                self._cur_pos = ranges[0][0]
         self._apply_selections()
         return True
 
     def scroll_to_current(self) -> None:
-        ranges = self._ensure_index()[3].get(self._current) if self._current is not None else None
-        if not ranges:
+        if self._cur_pos is None:
             return
         c = QTextCursor(self.document())
-        c.setPosition(ranges[0][0])
+        c.setPosition(self._cur_pos)
         rect = self.cursorRect(c)
         height = self.viewport().height()
         if rect.top() < 0 or rect.bottom() > height:

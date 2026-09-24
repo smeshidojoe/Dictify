@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QStackedWidget,
     QToolButton,
@@ -27,12 +26,12 @@ from PySide6.QtWidgets import (
 from dictify import APP_NAME, exporters, settings
 from dictify.formatting import ViewOptions, to_text
 from dictify.i18n import tr
-from dictify.model import Segment, Transcript
+from dictify.model import WORD_LEAD_IN, Segment, Transcript
 from dictify.ui import icons
 from dictify.ui.editor import TranscriptEditor
 from dictify.ui.player import PlayerBar
 from dictify.ui.sidebar import Sidebar
-from dictify.ui.widgets import DropZone, Toast, muted
+from dictify.ui.widgets import DropOverlay, DropZone, Toast, muted
 
 log = logging.getLogger(__name__)
 
@@ -59,11 +58,11 @@ class Workspace(QWidget):
         self._visible: list[int] = []
 
         # ----- toolbar -------------------------------------------------------------------
-        bar = QWidget()
+        self.bar = bar = QWidget()
         bar.setObjectName("Toolbar")
         bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         bar.setFixedHeight(52)
-        tb = QHBoxLayout(bar)
+        self.toolbar_layout = tb = QHBoxLayout(bar)
         tb.setContentsMargins(10, 8, 10, 8)
         tb.setSpacing(8)
 
@@ -123,25 +122,20 @@ class Workspace(QWidget):
         self.drop.fileDropped.connect(self.fileChosen)
         drop_page = QWidget()
         drop_layout = QVBoxLayout(drop_page)
-        drop_layout.setContentsMargins(28, 28, 28, 28)
-        drop_layout.addWidget(self.drop)
+        drop_layout.setContentsMargins(16, 16, 16, 16)
+        drop_layout.addWidget(self.drop, 1)
 
         self.editor = TranscriptEditor()
         self.stack = QStackedWidget()
         self.stack.addWidget(drop_page)
         self.stack.addWidget(self.editor)
 
-        self.thin = QProgressBar()
-        self.thin.setObjectName("Thin")
-        self.thin.setTextVisible(False)
-        self.thin.setFixedHeight(3)
         self.player = PlayerBar()
         self.sidebar = Sidebar(self.opts)
 
         left = QVBoxLayout()
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(0)
-        left.addWidget(self.thin)
         left.addWidget(self.stack, 1)
         left.addWidget(self.player)
         body = QHBoxLayout()
@@ -156,11 +150,13 @@ class Workspace(QWidget):
         root.addWidget(bar)
         root.addLayout(body, 1)
         self.toast = Toast(self)
+        self.overlay = DropOverlay(self.stack)
+        self.overlay.fileDropped.connect(self.fileChosen)
 
         self._live_timer = QTimer(self, singleShot=True, interval=300, timeout=self._render_live)
         self._clock = QTimer(self, interval=1000, timeout=self.sidebar.refresh_detail)
 
-        self.sidebar_btn.toggled.connect(self.sidebar.slide)
+        self.sidebar_btn.toggled.connect(self._toggle_sidebar)
         self.editor.seekRequested.connect(self._seek_to)
         self.editor.togglePlay.connect(self.player.toggle)
         self.editor.skip.connect(self.player.skip)
@@ -198,15 +194,15 @@ class Workspace(QWidget):
         self.title.setText(APP_NAME)
         self.close_btn.hide()
         self.stack.setCurrentIndex(0)
-        self.thin.hide()
         self._clock.stop()
         self._show_actions(False)
         self._show_search(False)
         self.sidebar.set_state("idle", has_file=False)
         self.sidebar.set_view_visible(False)
         self.sidebar.set_info(None)
-        self.sidebar_btn.setChecked(False)
-        self.sidebar.slide(False)
+        visible = settings.get("sidebar_visible")
+        self.sidebar_btn.setChecked(visible)
+        self.sidebar.slide(visible)
 
     def load_media(self, path: str, duration: float) -> None:
         """A new file: show it, load the player and slide the sidebar in."""
@@ -226,8 +222,6 @@ class Workspace(QWidget):
         self.sidebar.set_state("idle")
         self.sidebar.set_info(None)
         self.sidebar.set_view_visible(False)
-        self.sidebar_btn.setChecked(True)
-        self.sidebar.slide(True)
 
     def begin_live(self, duration: float) -> None:
         self.live = Transcript(self.path, duration=duration)
@@ -237,8 +231,7 @@ class Workspace(QWidget):
         self._starts = None
         self._show_actions(False)
         self._show_search(True)
-        self.thin.show()
-        self.thin.setRange(0, 0)
+        self.sidebar_btn.setChecked(True)  # progress lives in the sidebar
         self.sidebar.set_state("running")
         self.sidebar.set_view_visible(True)
         self.sidebar.set_info(None)
@@ -253,11 +246,6 @@ class Workspace(QWidget):
 
     def set_stage(self, stage: str, fraction: float, detail: str) -> None:
         self.sidebar.set_stage(stage, fraction, detail)
-        if fraction < 0:
-            self.thin.setRange(0, 0)
-        else:
-            self.thin.setRange(0, 1000)
-            self.thin.setValue(int(fraction * 1000))
 
     def set_transcript(self, t: Transcript) -> None:
         self._end_run()
@@ -293,7 +281,6 @@ class Workspace(QWidget):
         self._live_timer.stop()
         self._clock.stop()
         self.live = None
-        self.thin.hide()
 
     def _render_live(self) -> None:
         if self.live is None:
@@ -304,6 +291,19 @@ class Workspace(QWidget):
         self._starts = None
         if follow:
             bar.setValue(bar.maximum())
+
+    def _toggle_sidebar(self, on: bool) -> None:
+        self.sidebar.slide(on)
+        settings.put("sidebar_visible", on)
+
+    def show_drop_overlay(self, on: bool) -> None:
+        """Highlights the text area while a file is dragged over a loaded transcript."""
+        if on and self.stack.currentIndex() == 1:
+            self.overlay.setGeometry(self.stack.rect())
+            self.overlay.raise_()
+            self.overlay.show()
+        else:
+            self.overlay.hide()
 
     def _show_actions(self, on: bool) -> None:
         for w in (self.edit_btn, self.copy_btn, self.export_btn):
@@ -393,7 +393,16 @@ class Workspace(QWidget):
         return self._visible[k] if k >= 0 else None
 
     def _on_position(self, seconds: float) -> None:
-        if self.current() and self.editor.set_current(self._seg_at_time(seconds)) and self.player.is_playing():
+        t = self.current()
+        if t is None:
+            return
+        sid = self._seg_at_time(seconds)
+        word = None
+        if sid is not None and t.segments[sid].words:
+            starts = [w.start for w in t.segments[sid].words]
+            # Playback of a clicked word starts WORD_LEAD_IN early; highlight that word already.
+            word = max(0, bisect_right(starts, seconds + WORD_LEAD_IN + 0.03) - 1)
+        if self.editor.set_current(sid, word) and self.player.is_playing():
             self.editor.scroll_to_current()
 
     def _seek_to(self, sid: int, offset: int) -> None:
@@ -402,7 +411,7 @@ class Workspace(QWidget):
             return
         self.editor.sync()
         self.player.seek(t.segments[sid].time_at(offset))
-        self.editor.set_current(sid)
+        self._on_position(t.segments[sid].time_at(offset))
         if not self.player.is_playing():
             self.player.toggle()
 

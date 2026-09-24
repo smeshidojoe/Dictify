@@ -15,6 +15,7 @@ LIGHT = {
     "hover": "#ececf0",
     "field": "#ffffff",
     "current": "#dbe8fd",
+    "current_word": "#b5d0fb",
     "search": "#fff0a0",
     "search_current": "#ffc64d",
 }
@@ -29,6 +30,7 @@ DARK = {
     "hover": "#333336",
     "field": "#2b2b2e",
     "current": "#27456f",
+    "current_word": "#2f63b3",
     "search": "#6a5a12",
     "search_current": "#a67c00",
 }
@@ -133,8 +135,6 @@ def _stylesheet() -> str:
 
     QProgressBar {{ background: {t['border']}; border: none; border-radius: 3px; max-height: 6px; }}
     QProgressBar::chunk {{ background: {t['accent']}; border-radius: 3px; }}
-    QProgressBar#Thin {{ background: transparent; border-radius: 0; max-height: 3px; }}
-    QProgressBar#Thin::chunk {{ border-radius: 0; }}
 
     QSlider::groove:horizontal {{ height: 4px; background: {t['border']}; border-radius: 2px; }}
     QSlider::sub-page:horizontal {{ background: {t['accent']}; border-radius: 2px; }}

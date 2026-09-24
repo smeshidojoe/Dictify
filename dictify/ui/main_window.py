@@ -4,14 +4,14 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QEvent, QThread, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
 
 from dictify import APP_NAME, settings
 from dictify.audio import probe_duration
 from dictify.i18n import tr
-from dictify.ui import theme
+from dictify.ui import chrome, theme
 from dictify.ui.models_dialog import ModelsDialog
 from dictify.ui.workspace import Workspace
 from dictify.worker import Job, TranscribeWorker
@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
 
         self.ws = Workspace()
         self.setCentralWidget(self.ws)
+        self.chrome = chrome.create(self, self.ws)
 
         self._job: Job | None = None
         self._close_after_job = False
@@ -158,11 +159,29 @@ class MainWindow(QMainWindow):
 
     # ----- window events ---------------------------------------------------------------------
 
+    def nativeEvent(self, event_type, message):
+        handled = self.chrome.native_event(event_type, message)
+        return handled if handled is not None else super().nativeEvent(event_type, message)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.chrome.on_show()
+
+    def changeEvent(self, e):
+        super().changeEvent(e)
+        if e.type() == QEvent.Type.WindowStateChange:
+            self.chrome.on_state_change()
+
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
             e.acceptProposedAction()
+            self.ws.show_drop_overlay(True)
+
+    def dragLeaveEvent(self, e):
+        self.ws.show_drop_overlay(False)
 
     def dropEvent(self, e):
+        self.ws.show_drop_overlay(False)
         urls = [u for u in e.mimeData().urls() if u.isLocalFile()]
         if urls:
             e.acceptProposedAction()

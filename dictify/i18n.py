@@ -160,4 +160,5 @@ RU = {
     "Press “Transcribe” to start.": "Нажмите «Распознать», чтобы начать.",
     "Wait for the transcription to finish or cancel it first.": "Дождитесь окончания распознавания или отмените его.",
     "The interface language will change after the file is closed.": "Язык интерфейса сменится после закрытия файла.",
+    "Drop the file to transcribe it": "Отпустите файл, чтобы распознать его",
 }
