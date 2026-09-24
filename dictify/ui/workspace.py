@@ -43,7 +43,6 @@ MEDIA_EXTENSIONS = (
 
 class Workspace(QWidget):
     fileChosen = Signal(str)
-    closeRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -66,9 +65,6 @@ class Workspace(QWidget):
         tb.setContentsMargins(10, 8, 10, 8)
         tb.setSpacing(8)
 
-        self.close_btn = QToolButton()
-        self.close_btn.setToolTip(tr("Close file"))
-        self.close_btn.clicked.connect(self.closeRequested)
         self.title = QLabel(APP_NAME)
         self.title.setObjectName("FileName")
 
@@ -107,7 +103,6 @@ class Workspace(QWidget):
         self.sidebar_btn.setCheckable(True)
         self.sidebar_btn.setToolTip(tr("Show or hide the sidebar"))
 
-        tb.addWidget(self.close_btn)
         tb.addWidget(self.title, 1)
         for w in (self.edit_btn, self.copy_btn, self.export_btn):
             tb.addWidget(w)
@@ -192,7 +187,6 @@ class Workspace(QWidget):
         self.player.hide()
         self.editor.set_editing(False)
         self.title.setText(APP_NAME)
-        self.close_btn.hide()
         self.stack.setCurrentIndex(0)
         self._clock.stop()
         self._show_actions(False)
@@ -210,7 +204,6 @@ class Workspace(QWidget):
         self.t = self.live = None
         self.dirty = False
         self.title.setText(Path(path).name)
-        self.close_btn.show()
         self.editor.set_editing(False)
         self.editor.set_transcript(Transcript(path, duration=duration), self.opts)
         self.editor.setPlaceholderText(tr("Press “Transcribe” to start."))
@@ -317,15 +310,13 @@ class Workspace(QWidget):
             self._on_search_result(-1, 0)
 
     def refresh_icons(self) -> None:
-        self.close_btn.setIcon(icons.chevron_left())
         self.prev_btn.setIcon(icons.chevron_up())
         self.next_btn.setIcon(icons.chevron_down())
         self.sidebar_btn.setIcon(icons.sidebar())
         self.edit_btn.setIcon(icons.pencil())
         self.search.removeAction(self._search_action)
         self._search_action = self.search.addAction(icons.search(), QLineEdit.ActionPosition.LeadingPosition)
-        for b in (self.close_btn, self.sidebar_btn):
-            b.setIconSize(QSize(18, 18))
+        self.sidebar_btn.setIconSize(QSize(18, 18))
         self.player.refresh_icons()
 
     def on_theme_changed(self) -> None:

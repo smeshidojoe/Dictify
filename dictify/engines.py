@@ -89,6 +89,7 @@ class FasterEngine:
             vad_filter=vad,
             vad_parameters={"min_silence_duration_ms": 500},
             word_timestamps=True,
+            condition_on_previous_text=False,  # keeps one badly decoded window from setting the style
         )
         duration = info.duration or len(audio) / SAMPLE_RATE
         for seg in segments:
@@ -185,6 +186,7 @@ class MlxEngine:
                 language=language,
                 verbose=True,
                 word_timestamps=True,
+                condition_on_previous_text=False,
             )
         segments = []
         for raw in result.get("segments", []):

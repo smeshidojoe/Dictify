@@ -92,6 +92,37 @@ def run(argv: list[str]) -> int:
         step("export")
         window.ws.dirty = False
         window.shutdown(ask=False)
+
+        # The app transcribes in a separate process (spawned from the frozen executable).
+        from dictify.worker import Job, TranscribeService
+
+        service = TranscribeService()
+        got: dict = {"segments": 0}
+        service.segment.connect(lambda _s: got.update(segments=got["segments"] + 1))
+        service.finished.connect(lambda tr_: got.update(transcript=tr_))
+        service.failed.connect(lambda msg: got.update(error=msg))
+
+        def wait(cond, seconds):
+            deadline = time.monotonic() + seconds
+            while not cond() and time.monotonic() < deadline:
+                app.processEvents()
+                time.sleep(0.02)
+
+        service.run(Job(audio_path, model_id, None))
+        wait(lambda: "transcript" in got or "error" in got, 180)
+        if "transcript" not in got:
+            raise RuntimeError(f"worker process: {got.get('error', 'timed out')}")
+        report["worker_text"] = " ".join(s.text for s in got["transcript"].segments)
+        step("worker", streamed=got["segments"])
+
+        service.run(Job(audio_path, model_id, None))
+        wait(lambda: False, 0.3)
+        started = time.monotonic()
+        service.cancel()
+        report["cancel_seconds"] = round(time.monotonic() - started, 3)
+        if service.is_busy() or service._proc is not None or report["cancel_seconds"] > 3:
+            raise RuntimeError("cancel did not stop the worker process")
+        step("cancel")
         report["ok"] = True
     except Exception:
         report["error"] = traceback.format_exc()
