@@ -115,11 +115,26 @@ def run(argv: list[str]) -> int:
         report["worker_text"] = " ".join(s.text for s in got["transcript"].segments)
         step("worker", streamed=got["segments"])
 
-        service.run(Job(audio_path, model_id, None))
-        wait(lambda: False, 0.3)
-        started = time.monotonic()
+        # Cancel mid-job: use a long file so the job is surely still running (a fast GPU
+        # finishes the short sample before the cancel would arrive).
+        import wave
+
+        import numpy as np
+
+        long_path = out_dir / "selftest-long.wav"
+        pcm = (np.tile(audio, 40) * 32767).astype(np.int16)
+        with wave.open(str(long_path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(SAMPLE_RATE)
+            w.writeframes(pcm.tobytes())
+        service.run(Job(str(long_path), model_id, None))
+        wait(lambda: False, 1.0)
+        if not service.is_busy():
+            raise RuntimeError("long job finished before it could be cancelled")
+        cancel_started = time.monotonic()
         service.cancel()
-        report["cancel_seconds"] = round(time.monotonic() - started, 3)
+        report["cancel_seconds"] = round(time.monotonic() - cancel_started, 3)
         if service.is_busy() or service._proc is not None or report["cancel_seconds"] > 3:
             raise RuntimeError("cancel did not stop the worker process")
         step("cancel")
