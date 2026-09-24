@@ -1,8 +1,11 @@
 """Whisper backends: faster-whisper (Windows/Linux/Intel Mac) and mlx-whisper (Apple Silicon)."""
 from __future__ import annotations
 
+import contextlib
+import io
 import logging
 import os
+import re
 import sys
 import types
 from pathlib import Path
@@ -10,10 +13,11 @@ from typing import Callable
 
 import numpy as np
 
+from dictify import align
 from dictify.audio import SAMPLE_RATE
 from dictify.catalog import backend
 from dictify.errors import Cancelled
-from dictify.model import Segment
+from dictify.model import Segment, build_words
 
 log = logging.getLogger(__name__)
 
@@ -84,12 +88,13 @@ class FasterEngine:
             beam_size=5,
             vad_filter=vad,
             vad_parameters={"min_silence_duration_ms": 500},
+            word_timestamps=True,
         )
         duration = info.duration or len(audio) / SAMPLE_RATE
         for seg in segments:
             if is_cancelled():
                 raise Cancelled()
-            s = Segment(seg.start, seg.end, seg.text.strip())
+            s = _segment(seg.start, seg.end, seg.text, [(w.word, w.start, w.end) for w in seg.words or []])
             if s.text:
                 emitted.append(s)
                 on_segment(s)
@@ -164,21 +169,69 @@ class MlxEngine:
                     raise Cancelled()
 
         transcribe_module.tqdm = types.SimpleNamespace(tqdm=ProgressBar)
+        timing_module = importlib.import_module("mlx_whisper.timing")
+        timing_module.dtw = align.dtw
+        timing_module.median_filter = align.median_filter
         if is_cancelled():
             raise Cancelled()
-        result = mlx_whisper.transcribe(
-            audio,
-            path_or_hf_repo=str(model_dir),
-            language=language,
-            verbose=False,
-        )
+
+        # With verbose=True mlx_whisper prints each finished segment; parse those lines to
+        # show text while the file is still being transcribed.
+        stream = _SegmentStream(on_segment)
+        with contextlib.redirect_stdout(stream):
+            result = mlx_whisper.transcribe(
+                audio,
+                path_or_hf_repo=str(model_dir),
+                language=language,
+                verbose=True,
+                word_timestamps=True,
+            )
         segments = []
         for raw in result.get("segments", []):
-            s = Segment(float(raw["start"]), float(raw["end"]), raw["text"].strip())
+            pieces = [(w["word"], w["start"], w["end"]) for w in raw.get("words", [])]
+            s = _segment(raw["start"], raw["end"], raw["text"], pieces)
             if s.text:
                 segments.append(s)
-                on_segment(s)
         return segments, result.get("language")
+
+
+def _segment(start: float, end: float, text: str, pieces: list[tuple[str, float, float]]) -> Segment:
+    joined, words = build_words(pieces)
+    if words:
+        for w in words:  # word times occasionally spill past their segment
+            w.start = min(max(w.start, start), end)
+        return Segment(float(start), float(end), joined, words)
+    return Segment(float(start), float(end), text.strip())
+
+
+_LINE = re.compile(r"^\[((?:\d+:)?\d+:\d+\.\d+) --> ((?:\d+:)?\d+:\d+\.\d+)\]\s?(.*)$")
+
+
+def _parse_ts(value: str) -> float:
+    seconds = 0.0
+    for part in value.split(":"):
+        seconds = seconds * 60 + float(part)
+    return seconds
+
+
+class _SegmentStream(io.TextIOBase):
+    """stdout replacement that turns mlx_whisper's verbose lines into preview segments."""
+
+    def __init__(self, on_segment: OnSegment):
+        self._on_segment = on_segment
+        self._buffer = ""
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, text: str) -> int:
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            m = _LINE.match(line.strip())
+            if m and m.group(3).strip():
+                self._on_segment(Segment(_parse_ts(m.group(1)), _parse_ts(m.group(2)), m.group(3).strip()))
+        return len(text)
 
 
 def create_engine():
@@ -186,9 +239,9 @@ def create_engine():
 
 
 def _stub_word_timing_deps() -> None:
-    """mlx_whisper imports numba and scipy at module level but only uses them for
-    word-level timestamps, which Dictify doesn't request. The app bundle leaves
-    them out (~200 MB), so provide inert stand-ins when they are missing."""
+    """mlx_whisper imports numba and scipy at module level for word timestamps. The app
+    bundle leaves them out (~200 MB): these stand-ins satisfy the imports, and the two
+    functions that need them are replaced with dictify.align."""
     import importlib.util
 
     if "numba" not in sys.modules and importlib.util.find_spec("numba") is None:

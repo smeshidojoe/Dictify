@@ -1,4 +1,4 @@
-"""Main window: switches between start, progress and transcript screens and owns the worker thread."""
+"""Main window: one workspace, plus the transcription flow and the worker thread."""
 from __future__ import annotations
 
 import logging
@@ -6,15 +6,14 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QStackedWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
 
 from dictify import APP_NAME, settings
+from dictify.audio import probe_duration
 from dictify.i18n import tr
 from dictify.ui import theme
 from dictify.ui.models_dialog import ModelsDialog
-from dictify.ui.progress_view import ProgressView
-from dictify.ui.start_view import StartView
-from dictify.ui.transcript_page import TranscriptPage
+from dictify.ui.workspace import Workspace
 from dictify.worker import Job, TranscribeWorker
 
 log = logging.getLogger(__name__)
@@ -28,93 +27,111 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.resize(1120, 740)
-        self.setMinimumSize(860, 580)
+        self.setMinimumSize(760, 520)
         self.setAcceptDrops(True)
 
-        self.start = StartView()
-        self.progress = ProgressView()
-        self.page = TranscriptPage()
-        self.stack = QStackedWidget()
-        for w in (self.start, self.progress, self.page):
-            self.stack.addWidget(w)
-        self.setCentralWidget(self.stack)
+        self.ws = Workspace()
+        self.setCentralWidget(self.ws)
 
         self._job: Job | None = None
+        self._close_after_job = False
+        self._rebuild_pending = False
+        self._duration = 0.0
         self._thread = QThread(self)
         self._worker = TranscribeWorker()
         self._worker.moveToThread(self._thread)
         self.runJob.connect(self._worker.run)
-        self._worker.stage.connect(self.progress.set_stage)
-        self._worker.segment.connect(self.progress.add_segment)
+        self._worker.stage.connect(self.ws.set_stage)
+        self._worker.segment.connect(self.ws.add_live_segment)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.cancelled.connect(self._on_cancelled)
         self._thread.start()
 
-        self.start.fileChosen.connect(self.open_file)
-        self.start.manageModels.connect(self._show_models)
-        self.start.uiLanguageChanged.connect(self.rebuildRequested)
-        self.progress.cancelRequested.connect(self._worker.cancel)
-        self.page.backRequested.connect(self._back_to_start)
+        self.ws.fileChosen.connect(self.open_file)
+        self.ws.closeRequested.connect(self.close_file)
+        self.ws.sidebar.startRequested.connect(self.start_job)
+        self.ws.sidebar.cancelRequested.connect(self._worker.cancel)
+        self.ws.sidebar.manageModels.connect(self._show_models)
+        self.ws.sidebar.uiLanguageChanged.connect(self._on_ui_language)
         QGuiApplication.styleHints().colorSchemeChanged.connect(self._on_theme)
 
-    # ----- flow ------------------------------------------------------------------
+    # ----- flow --------------------------------------------------------------------------
 
     def open_file(self, path: str) -> None:
         if self._job is not None:
+            self.ws.toast.show_message(tr("Wait for the transcription to finish or cancel it first."))
             return
         if not Path(path).is_file():
             QMessageBox.warning(self, APP_NAME, tr("File not found:\n{path}", path=path))
             return
         if not self._confirm_discard():
             return
-        self.page.close_transcript()
         settings.put("last_dir", str(Path(path).parent))
-        self._job = Job(path=path, **self.start.job_settings())
-        self.progress.start(path)
-        self.stack.setCurrentWidget(self.progress)
+        self._duration = probe_duration(path)
+        self.ws.load_media(path, self._duration)
         self.setWindowTitle(f"{Path(path).name} — {APP_NAME}")
+        self.start_job()
+
+    def start_job(self) -> None:
+        if self._job is not None or not self.ws.path:
+            return
+        if self.ws.t is not None and not self._confirm_discard():
+            return
+        self._job = Job(path=self.ws.path, **self.ws.sidebar.job_settings())
+        self.ws.begin_live(self._duration)
         self.runJob.emit(self._job)
 
-    def _on_finished(self, transcript) -> None:
-        self._job = None
-        self.progress.stop()
-        self.start.refresh_models()
-        if not transcript.segments:
-            QMessageBox.information(self, APP_NAME, tr("No speech was recognized in this file."))
-            self._show_start()
+    def close_file(self) -> None:
+        if self._job is not None:
+            self._close_after_job = True
+            self._worker.cancel()
             return
-        self.page.set_transcript(transcript)
-        self.stack.setCurrentWidget(self.page)
+        if self._confirm_discard():
+            self._show_empty()
+
+    def _show_empty(self) -> None:
+        self.ws.show_empty()
+        self.setWindowTitle(APP_NAME)
+        if self._rebuild_pending:
+            self._rebuild_pending = False
+            self.rebuildRequested.emit()
+
+    def _job_done(self) -> bool:
+        """Clears the running job; True when the user closed the file meanwhile."""
+        self._job = None
+        self.ws.sidebar.refresh_models()
+        if self._close_after_job:
+            self._close_after_job = False
+            self._show_empty()
+            return True
+        return False
+
+    def _on_finished(self, transcript) -> None:
+        if self._job_done():
+            return
+        if not transcript.segments:
+            self.ws.end_run_without_result()
+            QMessageBox.information(self, APP_NAME, tr("No speech was recognized in this file."))
+            return
+        self.ws.set_transcript(transcript)
 
     def _on_failed(self, message: str) -> None:
-        self._job = None
-        self.progress.stop()
-        self.start.refresh_models()
+        if self._job_done():
+            return
+        self.ws.end_run_without_result()
         QMessageBox.critical(self, tr("Transcription failed"), message)
-        self._show_start()
 
     def _on_cancelled(self) -> None:
-        self._job = None
-        self.progress.stop()
-        self.start.refresh_models()
-        self._show_start()
-
-    def _back_to_start(self) -> None:
-        if self._confirm_discard():
-            self.page.close_transcript()
-            self._show_start()
-
-    def _show_start(self) -> None:
-        self.stack.setCurrentWidget(self.start)
-        self.setWindowTitle(APP_NAME)
+        if not self._job_done():
+            self.ws.end_run_without_result()
 
     def _show_models(self) -> None:
         ModelsDialog(self._job.model_id if self._job else None, self).exec()
-        self.start.refresh_models()
+        self.ws.sidebar.refresh_models()
 
     def _confirm_discard(self) -> bool:
-        if not (self.page.t and self.page.dirty):
+        if not (self.ws.t and self.ws.dirty):
             return True
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Question)
@@ -126,15 +143,23 @@ class MainWindow(QMainWindow):
         box.exec()
         return box.clickedButton() is discard
 
+    def _on_ui_language(self) -> None:
+        # Rebuilding the window would drop a loaded file, so only do it when nothing is open.
+        if self.ws.path is None and self._job is None:
+            self.rebuildRequested.emit()
+        else:
+            self.ws.toast.show_message(tr("The interface language will change after the file is closed."))
+            self._rebuild_pending = True
+
     def _on_theme(self, *_):
         theme.apply(QApplication.instance())
-        self.page.on_theme_changed()
+        self.ws.on_theme_changed()
         self.update()
 
-    # ----- window events -----------------------------------------------------------
+    # ----- window events ---------------------------------------------------------------------
 
     def dragEnterEvent(self, e):
-        if self._job is None and e.mimeData().hasUrls():
+        if e.mimeData().hasUrls():
             e.acceptProposedAction()
 
     def dropEvent(self, e):
@@ -152,7 +177,7 @@ class MainWindow(QMainWindow):
     def shutdown(self, ask: bool) -> bool:
         if ask and not self._confirm_discard():
             return False
-        self.page.close_transcript()
+        self.ws.player.unload()
         self._worker.cancel()
         self._thread.quit()
         if not self._thread.wait(8000):

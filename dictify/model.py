@@ -1,6 +1,17 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass, field
+
+# Start playback slightly before the clicked word so its first sound isn't clipped.
+WORD_LEAD_IN = 0.12
+
+
+@dataclass
+class Word:
+    start: float
+    end: float
+    offset: int  # character offset of the word inside Segment.text
 
 
 @dataclass
@@ -8,6 +19,34 @@ class Segment:
     start: float
     end: float
     text: str
+    words: list[Word] = field(default_factory=list)
+
+    def time_at(self, offset: int) -> float:
+        """Media time of the character at `offset` in the segment text: the word's own
+        timestamp when known, otherwise interpolated across the segment."""
+        if self.words:
+            k = bisect_right([w.offset for w in self.words], offset) - 1
+            word = self.words[max(0, k)]
+            return max(self.start, word.start - WORD_LEAD_IN)
+        if not self.text:
+            return self.start
+        share = min(1.0, max(0.0, offset / len(self.text)))
+        return self.start + (self.end - self.start) * share
+
+
+def build_words(pieces: list[tuple[str, float, float]]) -> tuple[str, list[Word]]:
+    """Joins Whisper word pieces (which carry their leading space) into segment text,
+    remembering where each word starts."""
+    text = ""
+    words: list[Word] = []
+    for piece, start, end in pieces:
+        if not text:
+            piece = piece.lstrip()
+        if not piece.strip():
+            continue
+        words.append(Word(float(start), float(end), len(text) + len(piece) - len(piece.lstrip())))
+        text += piece
+    return text.rstrip(), words
 
 
 @dataclass

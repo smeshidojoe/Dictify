@@ -16,8 +16,7 @@ from PySide6.QtWidgets import (
 from dictify.catalog import MODELS, delete_model, is_downloaded, model_path, repo_for
 from dictify.i18n import tr
 from dictify.paths import models_dir
-from dictify.ui.start_view import size_label
-from dictify.ui.widgets import muted
+from dictify.ui.widgets import muted, size_label
 
 
 class ModelsDialog(QDialog):

@@ -54,3 +54,15 @@ def _duration_seconds(container, stream) -> float:
     if container.duration is not None:
         return container.duration / 1_000_000
     return 0.0
+
+
+def probe_duration(path: str) -> float:
+    """Container duration in seconds without decoding (0 when unknown)."""
+    import av
+
+    try:
+        with av.open(path, metadata_errors="ignore") as container:
+            stream = next((s for s in container.streams if s.type == "audio"), None)
+            return _duration_seconds(container, stream) if stream else 0.0
+    except av.error.FFmpegError:
+        return 0.0

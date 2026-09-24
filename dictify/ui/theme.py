@@ -87,7 +87,8 @@ def _stylesheet() -> str:
     t = _tokens
     return f"""
     QMainWindow, #Page {{ background: {t['bg']}; }}
-    #Sidebar {{ background: {t['sidebar']}; border-left: 1px solid {t['border']}; }}
+    #Sidebar {{ background: {t['sidebar']}; border: none; border-left: 1px solid {t['border']}; }}
+    #SidebarBody {{ background: {t['sidebar']}; }}
     #Toolbar {{ background: {t['sidebar']}; border-bottom: 1px solid {t['border']}; }}
     #PlayerBar {{ background: {t['sidebar']}; border-top: 1px solid {t['border']}; }}
     #Card {{ background: {t['field']}; border: 1px solid {t['border']}; border-radius: 10px; }}
@@ -132,6 +133,8 @@ def _stylesheet() -> str:
 
     QProgressBar {{ background: {t['border']}; border: none; border-radius: 3px; max-height: 6px; }}
     QProgressBar::chunk {{ background: {t['accent']}; border-radius: 3px; }}
+    QProgressBar#Thin {{ background: transparent; border-radius: 0; max-height: 3px; }}
+    QProgressBar#Thin::chunk {{ border-radius: 0; }}
 
     QSlider::groove:horizontal {{ height: 4px; background: {t['border']}; border-radius: 2px; }}
     QSlider::sub-page:horizontal {{ background: {t['accent']}; border-radius: 2px; }}

@@ -18,9 +18,11 @@ def test_docx_content(transcript, tmp_path):
     path = tmp_path / "out.docx"
     exporters.export(transcript, ViewOptions(), "docx", path)
     text = [p.text for p in Document(str(path)).paragraphs]
-    assert text[0] == "interview"
-    assert "Hello and welcome. Tell me about yourself." in text
-    assert "00:12 – 00:20" in text
+    assert text == ["interview", "Hello and welcome. Tell me about yourself.", "I love working with people. I was a teacher."]
+
+    exporters.export(transcript, ViewOptions(mode=MODE_SEGMENTS, end_times=False), "docx", path)
+    text = [p.text for p in Document(str(path)).paragraphs]
+    assert text[1] == "[00:00]  Hello and welcome."
 
 
 def test_pdf_is_valid(qapp, transcript, tmp_path):

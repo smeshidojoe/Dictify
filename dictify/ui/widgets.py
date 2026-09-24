@@ -16,6 +16,10 @@ from dictify.i18n import tr
 from dictify.ui import icons, theme
 
 
+def size_label(mb: int) -> str:
+    return f"{mb / 1000:.1f} GB" if mb >= 1000 else f"{mb} MB"
+
+
 def section_title(text: str) -> QLabel:
     label = QLabel(text.upper())
     label.setObjectName("SectionTitle")

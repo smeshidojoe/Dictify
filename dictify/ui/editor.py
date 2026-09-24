@@ -44,7 +44,7 @@ def _is_text(fmt: QTextCharFormat) -> bool:
 
 
 class TranscriptEditor(QTextEdit):
-    seekRequested = Signal(int)  # segment index
+    seekRequested = Signal(int, int)  # segment index, character offset inside the segment
     togglePlay = Signal()
     skip = Signal(float)
     edited = Signal()
@@ -180,7 +180,11 @@ class TranscriptEditor(QTextEdit):
             if _is_text(frag.charFormat()):
                 parts[_sid(frag.charFormat())].append(frag.text())
         for i in self._rendered:
-            self._t.segments[i].text = " ".join("".join(parts.get(i, [])).split())
+            seg = self._t.segments[i]
+            text = " ".join("".join(parts.get(i, [])).split())
+            if text != seg.text:
+                seg.text = text
+                seg.words = []  # word offsets no longer match; clicks fall back to interpolation
         self._dirty = False
 
     def _text_fmt(self, sid: int) -> QTextCharFormat:
@@ -231,6 +235,17 @@ class TranscriptEditor(QTextEdit):
         if k + 1 < len(sids):
             return sids[k + 1]
         return sids[k]
+
+    def offset_in_segment(self, sid: int, pos: int) -> int:
+        """Character offset of document position `pos` within segment `sid`'s text."""
+        offset = 0
+        for start, end in self._ensure_index()[3].get(sid, []):
+            if pos < start:
+                break
+            if pos < end:
+                return offset + pos - start
+            offset += end - start
+        return offset
 
     # ----- playback highlight --------------------------------------------------
 
@@ -332,9 +347,11 @@ class TranscriptEditor(QTextEdit):
         flags = Qt.TextInteractionFlag
         if on:
             self.setTextInteractionFlags(flags.TextEditorInteraction)
+            self.setCursorWidth(1)
             self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
         else:
             self.setTextInteractionFlags(flags.TextSelectableByMouse | flags.TextSelectableByKeyboard)
+            self.setCursorWidth(0)  # reading mode: selectable, but no blinking caret
             self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
         self.editingChanged.emit(on)
 
@@ -506,9 +523,10 @@ class TranscriptEditor(QTextEdit):
         self._press = None
         wants_seek = not self._editing or e.modifiers() & Qt.KeyboardModifier.ControlModifier
         if moved < 4 and wants_seek and not self.textCursor().hasSelection():
-            sid = self.seg_at(self.cursorForPosition(e.position().toPoint()).position())
+            pos = self.cursorForPosition(e.position().toPoint()).position()
+            sid = self.seg_at(pos)
             if sid is not None:
-                self.seekRequested.emit(sid)
+                self.seekRequested.emit(sid, self.offset_in_segment(sid, pos))
 
     def resizeEvent(self, e):
         super().resizeEvent(e)

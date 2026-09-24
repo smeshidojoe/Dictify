@@ -65,18 +65,10 @@ def _write_docx(t: Transcript, opts: ViewOptions, path: Path) -> None:
         run.font.color.rgb = RGBColor(*MUTED_RGB)
 
     for b in blocks(t, opts):
-        text = block_text(t, b)
-        if opts.mode == MODE_SEGMENTS:
-            p = doc.add_paragraph()
-            if b.label:
-                gray(p.add_run(f"[{b.label}]  "))
-            p.add_run(text)
-        else:
-            if b.label:
-                head = doc.add_paragraph()
-                head.paragraph_format.space_after = Pt(0)
-                gray(head.add_run(b.label))
-            doc.add_paragraph(text)
+        p = doc.add_paragraph()
+        if b.label:
+            gray(p.add_run(f"[{b.label}]  "))
+        p.add_run(block_text(t, b))
     doc.save(str(path))
 
 

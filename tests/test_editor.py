@@ -25,12 +25,9 @@ def move_to(ed, needle, offset=0):
 
 def test_render_transcript_mode(qapp, transcript):
     ed = make(qapp, transcript)
-    text = ed.toPlainText()
-    # two paragraphs split by the 4 s pause, each with a timestamp header
-    assert text.splitlines() == [
-        "00:00 – 00:08",
+    # two paragraphs split by the 4 s pause, no timestamps
+    assert ed.toPlainText().splitlines() == [
         "Hello and welcome. Tell me about yourself.",
-        "00:12 – 00:20",
         "I love working with people. I was a teacher.",
     ]
 
@@ -68,7 +65,7 @@ def test_first_segment_editable(qapp, transcript):
 
 
 def test_timestamp_protected(qapp, transcript):
-    ed = make(qapp, transcript)
+    ed = make(qapp, transcript, mode=MODE_SEGMENTS)
     before = ed.toPlainText()
     move_to(ed, "00:12", 2)
     QTest.keyClicks(ed, "x")
@@ -122,7 +119,7 @@ def test_paste_flattens_newlines(qapp, transcript):
     ed.insertFromMimeData(md)
     ed.sync()
     assert transcript.segments[3].text == "I was a teacher of math."
-    assert ed.document().blockCount() == 4
+    assert ed.document().blockCount() == 2
 
 
 def test_emptied_segment_disappears_after_rerender(qapp, transcript):
@@ -138,10 +135,12 @@ def test_emptied_segment_disappears_after_rerender(qapp, transcript):
 
 
 def test_seg_at_and_highlight(qapp, transcript):
-    ed = make(qapp, transcript)
+    ed = make(qapp, transcript, mode=MODE_SEGMENTS)
     text = ed.toPlainText()
     assert ed.seg_at(text.index("people")) == 2
     assert ed.seg_at(text.index("00:12")) == 2  # timestamp maps to the segment it labels
+    assert ed.offset_in_segment(2, text.index("00:12")) == 0
+    assert ed.offset_in_segment(2, text.index("people")) == len("I love working with ")
     assert ed.seg_at(0) == 0
     assert ed.set_current(3) is True
     assert ed.set_current(3) is False
@@ -178,3 +177,31 @@ def test_undo_restores_edit(qapp, transcript):
     QTest.keyClicks(ed, "abc")
     ed.undo()
     assert ed.toPlainText() == before
+
+
+def test_click_emits_segment_and_offset(qapp, transcript):
+    from PySide6.QtCore import QPoint
+
+    ed = make(qapp, transcript)
+    ed.set_editing(False)
+    got = []
+    ed.seekRequested.connect(lambda sid, off: got.append((sid, off)))
+    c = QTextCursor(ed.document())
+    c.setPosition(ed.toPlainText().index("people") + 2)
+    point = ed.cursorRect(c).center()
+    QTest.mouseClick(ed.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+    assert got and got[0][0] == 2
+    assert abs(got[0][1] - (len("I love working with ") + 2)) <= 1
+
+
+def test_edit_drops_word_timings_of_that_segment(qapp, transcript):
+    from dictify.model import Word
+
+    transcript.segments[0].words = [Word(0.0, 1.0, 0)]
+    transcript.segments[1].words = [Word(4.2, 5.0, 0)]
+    ed = make(qapp, transcript)
+    move_to(ed, "welcome", len("welcome"))
+    QTest.keyClicks(ed, "!")
+    ed.sync()
+    assert transcript.segments[0].words == []
+    assert transcript.segments[1].words != []

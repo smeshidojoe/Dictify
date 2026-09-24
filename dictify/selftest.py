@@ -62,9 +62,10 @@ def run(argv: list[str]) -> int:
         theme.apply(app)
         window = MainWindow()
         t = Transcript(audio_path, segments, language, len(audio) / SAMPLE_RATE, spec.name)
-        window.page.set_transcript(t)
+        window.ws.load_media(audio_path, t.duration)
+        window.ws.set_transcript(t)
         deadline = time.monotonic() + 10
-        player = window.page.player.player
+        player = window.ws.player.player
         while player.mediaStatus() in (QMediaPlayer.MediaStatus.LoadingMedia, QMediaPlayer.MediaStatus.NoMedia):
             app.processEvents()
             if time.monotonic() > deadline:
@@ -78,11 +79,11 @@ def run(argv: list[str]) -> int:
 
         for fmt in exporters.FORMATS:
             path = out_dir / f"selftest{fmt.ext}"
-            exporters.export(t, window.page.opts, fmt.key, path)
+            exporters.export(t, window.ws.opts, fmt.key, path)
             if path.stat().st_size == 0:
                 raise RuntimeError(f"empty export: {fmt.key}")
         step("export")
-        window.page.dirty = False
+        window.ws.dirty = False
         window.shutdown(ask=False)
         report["ok"] = True
     except Exception:

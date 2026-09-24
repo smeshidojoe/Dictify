@@ -57,18 +57,15 @@ def speech_language_name(code: str | None) -> str:
 
 RU = {
     # start screen
-    "Audio and video to text. Offline, on your computer.": "Аудио и видео в текст. Офлайн, прямо на вашем компьютере.",
     "Drop an audio or video file here": "Перетащите сюда аудио- или видеофайл",
     "or click to choose a file": "или нажмите, чтобы выбрать файл",
     "Model": "Модель",
-    "Models…": "Модели…",
     "Language": "Язык",
     "Detect automatically": "Определить автоматически",
     "Compute on": "Вычисления",
     "Automatic": "Автоматически",
     "CPU": "Процессор (CPU)",
     "GPU (NVIDIA CUDA)": "Видеокарта (NVIDIA CUDA)",
-    "Skip silence (fewer hallucinations)": "Пропускать тишину (меньше галлюцинаций)",
     "Interface": "Интерфейс",
     "System": "Системный",
     "Logs": "Логи",
@@ -90,7 +87,6 @@ RU = {
     "Cancel": "Отмена",
     "Cancelling…": "Отмена…",
     # transcript screen
-    "New transcription": "Новая расшифровка",
     "Edit": "Править",
     "Edit the transcript text (Esc to finish)": "Редактировать текст (Esc — закончить)",
     "Copy": "Копировать",
@@ -151,4 +147,17 @@ RU = {
         "В файле нет звуковой дорожки, или его формат не поддерживается.",
     "Could not download the model. Check your internet connection.":
         "Не удалось скачать модель. Проверьте подключение к интернету.",
+    # single-window flow
+    "Transcription": "Распознавание",
+    "Manage models": "Управление моделями",
+    "will be downloaded on first use": "скачается при первом использовании",
+    "Skip silence": "Пропускать тишину",
+    "Fewer hallucinations on long pauses": "Меньше галлюцинаций на длинных паузах",
+    "Transcribe": "Распознать",
+    "Transcribe again": "Распознать заново",
+    "No paragraphs": "Без абзацев",
+    "Close file": "Закрыть файл",
+    "Press “Transcribe” to start.": "Нажмите «Распознать», чтобы начать.",
+    "Wait for the transcription to finish or cancel it first.": "Дождитесь окончания распознавания или отмените его.",
+    "The interface language will change after the file is closed.": "Язык интерфейса сменится после закрытия файла.",
 }

@@ -5,8 +5,7 @@ from pathlib import Path
 from dictify import i18n
 from dictify.exporters import FORMATS
 from dictify.i18n import RU, UI_LANGUAGES
-from dictify.ui.progress_view import STAGES
-from dictify.ui.sidebar import PARAGRAPH_CHOICES
+from dictify.ui.sidebar import PARAGRAPH_CHOICES, STAGES
 
 ROOT = Path(__file__).resolve().parent.parent / "dictify"
 CALL = re.compile(r"""\btr\(\s*((?:(?:"[^"]*"|'[^']*')\s*)+)""")

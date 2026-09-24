@@ -40,17 +40,14 @@ def test_empty_segments_skipped(transcript):
     assert to_srt(transcript).count("-->") == 3
 
 
-def test_text_transcript_mode(transcript):
-    out = to_text(transcript, ViewOptions())
-    assert out == (
-        "[00:00 – 00:08]\nHello and welcome. Tell me about yourself.\n\n"
-        "[00:12 – 00:20]\nI love working with people. I was a teacher.\n"
-    )
-
-
-def test_text_plain_no_timestamps(transcript):
-    out = to_text(transcript, ViewOptions(timestamps=False))
+def test_text_transcript_mode_has_no_timestamps(transcript):
+    out = to_text(transcript, ViewOptions(timestamps=True))
     assert out == "Hello and welcome. Tell me about yourself.\n\nI love working with people. I was a teacher.\n"
+
+
+def test_transcript_mode_without_paragraphs(transcript):
+    out = to_text(transcript, ViewOptions(paragraph="none"))
+    assert out == "Hello and welcome. Tell me about yourself. I love working with people. I was a teacher.\n"
 
 
 def test_text_segments_mode(transcript):
@@ -78,4 +75,4 @@ def test_srt(transcript):
 
 def test_hours_format_for_long_media(transcript):
     transcript.duration = 4000
-    assert to_text(transcript, ViewOptions(end_times=False)).startswith("[0:00:00]")
+    assert to_text(transcript, ViewOptions(mode=MODE_SEGMENTS, end_times=False)).startswith("[0:00:00]")

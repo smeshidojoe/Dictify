@@ -9,8 +9,8 @@ from dictify.model import Transcript
 MODE_TRANSCRIPT = "transcript"
 MODE_SEGMENTS = "segments"
 
-# Soft limit of characters per paragraph in transcript mode.
-PARAGRAPH_SIZES = {"short": 300, "medium": 700, "long": 1500}
+# Soft limit of characters per paragraph in transcript mode; None = one continuous block.
+PARAGRAPH_SIZES = {"short": 300, "medium": 700, "long": 1500, "none": None}
 SENTENCE_END = (".", "!", "?", "…", '."', '?"', '!"', "»")
 
 
@@ -47,9 +47,12 @@ def fmt_srt_time(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def paragraphs(t: Transcript, pause: float, max_chars: int) -> list[list[int]]:
+def paragraphs(t: Transcript, pause: float, max_chars: int | None) -> list[list[int]]:
     """Groups visible segments into paragraphs: break on long pauses,
     or at a sentence end once the paragraph is long enough."""
+    if max_chars is None:
+        visible = t.visible()
+        return [visible] if visible else []
     groups: list[list[int]] = []
     cur: list[int] = []
     length = 0
@@ -70,20 +73,22 @@ def paragraphs(t: Transcript, pause: float, max_chars: int) -> list[list[int]]:
 
 
 def blocks(t: Transcript, opts: ViewOptions) -> list[Block]:
-    hours = t.duration >= 3600
-
-    def label(first: int, last: int) -> str | None:
-        if not opts.timestamps:
-            return None
-        start = fmt_time(t.segments[first].start, hours)
-        if not opts.end_times:
-            return start
-        return f"{start} – {fmt_time(t.segments[last].end, hours)}"
-
+    """Segments mode: one block per segment, optionally timestamped.
+    Transcript mode: continuous text in paragraphs, never timestamped."""
     if opts.mode == MODE_SEGMENTS:
-        return [Block(label(i, i), [i]) for i in t.visible()]
+        hours = t.duration >= 3600
+
+        def label(i: int) -> str | None:
+            if not opts.timestamps:
+                return None
+            start = fmt_time(t.segments[i].start, hours)
+            if not opts.end_times:
+                return start
+            return f"{start} – {fmt_time(t.segments[i].end, hours)}"
+
+        return [Block(label(i), [i]) for i in t.visible()]
     max_chars = PARAGRAPH_SIZES.get(opts.paragraph, PARAGRAPH_SIZES["medium"])
-    return [Block(label(g[0], g[-1]), g) for g in paragraphs(t, opts.pause, max_chars)]
+    return [Block(None, g) for g in paragraphs(t, opts.pause, max_chars)]
 
 
 def block_text(t: Transcript, block: Block) -> str:
@@ -94,12 +99,7 @@ def to_text(t: Transcript, opts: ViewOptions) -> str:
     lines = []
     for b in blocks(t, opts):
         text = block_text(t, b)
-        if b.label is None:
-            lines.append(text)
-        elif opts.mode == MODE_SEGMENTS:
-            lines.append(f"[{b.label}] {text}")
-        else:
-            lines.append(f"[{b.label}]\n{text}")
+        lines.append(f"[{b.label}] {text}" if b.label else text)
     sep = "\n" if opts.mode == MODE_SEGMENTS else "\n\n"
     return sep.join(lines) + "\n" if lines else ""
 
@@ -108,12 +108,7 @@ def to_markdown(t: Transcript, opts: ViewOptions) -> str:
     out = [f"# {Path(t.media_path).stem}", ""]
     for b in blocks(t, opts):
         text = _md_escape(block_text(t, b))
-        if b.label is None:
-            out.append(text)
-        elif opts.mode == MODE_SEGMENTS:
-            out.append(f"**[{b.label}]** {text}")
-        else:
-            out.append(f"**{b.label}**  \n{text}")
+        out.append(f"**[{b.label}]** {text}" if b.label else text)
         out.append("")
     return "\n".join(out)
 
