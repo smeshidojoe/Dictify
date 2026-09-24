@@ -295,18 +295,23 @@ _cuda_dirs_added = False
 
 
 def _add_cuda_dll_dirs() -> None:
-    """Make pip-installed NVIDIA runtime libraries (nvidia-cublas-cu12, nvidia-cudnn-cu12)
-    visible to CTranslate2 on Windows."""
+    """Make NVIDIA's cuBLAS visible to CTranslate2 on Windows: downloaded from within the app
+    (dictify.gpu) or pip-installed in a dev environment (requirements-gpu.txt). Runs once per
+    process, so installing the libraries takes a fresh worker process."""
     global _cuda_dirs_added
     if _cuda_dirs_added or sys.platform != "win32":
         return
     _cuda_dirs_added = True
     import site
 
+    from dictify import gpu
+
+    dirs = [gpu.lib_dir()] if gpu.is_installed() else []
     roots = [Path(p) for p in site.getsitepackages()]
     if getattr(sys, "frozen", False):
         roots.append(Path(getattr(sys, "_MEIPASS", "")))
     for root in roots:
-        for bin_dir in (root / "nvidia").glob("*/bin"):
-            os.add_dll_directory(str(bin_dir))
-            os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+        dirs.extend((root / "nvidia").glob("*/bin"))
+    for bin_dir in dirs:
+        os.add_dll_directory(str(bin_dir))
+        os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")

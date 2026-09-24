@@ -159,4 +159,19 @@ RU = {
     "The transcription process stopped unexpectedly (exit code {code}).":
         "Процесс распознавания неожиданно завершился (код {code}).",
     "Drop the file to transcribe it": "Отпустите файл, чтобы распознать его",
+    # NVIDIA GPU
+    "Faster on your graphics card": "Быстрее на видеокарте",
+    "Your NVIDIA card can transcribe many times faster than the processor. "
+    "It needs NVIDIA's CUDA libraries, a one-time {size} download.":
+        "Видеокарта NVIDIA распознаёт во много раз быстрее процессора. "
+        "Для этого нужны библиотеки NVIDIA CUDA, их нужно скачать один раз ({size}).",
+    "Download": "Скачать",
+    "Try again": "Повторить",
+    "Downloading NVIDIA CUDA libraries…": "Скачивание библиотек NVIDIA CUDA…",
+    "Could not download the libraries: {error}": "Не удалось скачать библиотеки: {error}",
+    "Done: transcription now runs on the graphics card.": "Готово: теперь распознавание идёт на видеокарте.",
+    "NVIDIA CUDA libraries": "Библиотеки NVIDIA CUDA",
+    "installed": "установлены",
+    "Delete the CUDA libraries? Transcription will run on the processor until you download them again.":
+        "Удалить библиотеки CUDA? Пока вы не скачаете их снова, распознавание будет идти на процессоре.",
 }

@@ -52,6 +52,8 @@ class MainWindow(QMainWindow):
         # Keep the chosen model loaded in the worker, so "Transcribe" starts right away.
         self._warm_timer = QTimer(self, singleShot=True, interval=800, timeout=self._warm_up)
         self.ws.sidebar.modelSettingsChanged.connect(self._warm_timer.start)
+        if self.ws.sidebar.gpu_panel is not None:
+            self.ws.sidebar.gpu_panel.installed.connect(self._on_gpu_installed)
         QGuiApplication.styleHints().colorSchemeChanged.connect(self._on_theme)
 
     # ----- flow --------------------------------------------------------------------------
@@ -79,6 +81,7 @@ class MainWindow(QMainWindow):
     def _job_done(self) -> None:
         self._job = None
         self.ws.sidebar.refresh_models()
+        self._warm_timer.start()  # the process may have been replaced (cancel, CUDA libraries)
 
     def _on_finished(self, transcript) -> None:
         self._job_done()
@@ -96,7 +99,6 @@ class MainWindow(QMainWindow):
     def _on_cancelled(self) -> None:
         self._job_done()
         self.ws.end_run_without_result()
-        self._warm_timer.start()  # cancelling killed the process, and the model with it
 
     def _warm_up(self) -> None:
         if self._job is not None:
@@ -106,12 +108,29 @@ class MainWindow(QMainWindow):
             self._service.warm(job["model_id"], job["device"])
 
     def _show_models(self) -> None:
-        ModelsDialog(self._job.model_id if self._job else None, self).exec()
+        ModelsDialog(self._job.model_id if self._job else None, self._release_gpu, self).exec()
         self.ws.sidebar.refresh_models()
+        if self.ws.sidebar.gpu_panel is not None:
+            self.ws.sidebar.gpu_panel.refresh()
+
+    def _release_gpu(self) -> bool:
+        """Frees the CUDA libraries so they can be deleted: the idle worker holds them open."""
+        if self._job is not None:
+            return False
+        self._service.restart()
+        self._warm_timer.start()
+        return True
+
+    def _on_gpu_installed(self) -> None:
+        # The worker looked for the libraries when it started: start a new one that finds them.
+        self._service.restart()
+        self._warm_timer.start()
+        self.ws.toast.show_message(tr("Done: transcription now runs on the graphics card."))
 
     def _on_ui_language(self) -> None:
         # Rebuilding the window would drop a loaded file, so only do it when nothing is open.
-        if self.ws.path is None and self._job is None:
+        panel = self.ws.sidebar.gpu_panel
+        if self.ws.path is None and self._job is None and not (panel and panel.is_busy()):
             self.rebuildRequested.emit()
         else:
             self.ws.toast.show_message(tr("The interface language will change after restarting the app."))
@@ -160,5 +179,7 @@ class MainWindow(QMainWindow):
 
     def shutdown(self) -> None:
         self._warm_timer.stop()
+        if self.ws.sidebar.gpu_panel is not None:
+            self.ws.sidebar.gpu_panel.stop()
         self.ws.player.unload()
         self._service.shutdown()

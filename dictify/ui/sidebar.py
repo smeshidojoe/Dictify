@@ -22,13 +22,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from dictify import __version__, settings
+from dictify import __version__, gpu, settings
 from dictify.catalog import MODELS, backend, is_downloaded
 from dictify.formatting import MODE_SEGMENTS, MODE_TRANSCRIPT, ViewOptions, fmt_time
 from dictify.i18n import SPEECH_LANGUAGES, UI_LANGUAGES, speech_language_name, tr
 from dictify.model import Transcript
 from dictify.paths import logs_dir
 from dictify.ui import theme
+from dictify.ui.gpu_panel import GpuPanel
 from dictify.ui.widgets import ModeCard, ProgressLine, Switch, fade_in, muted, section_title, size_label
 
 WIDTH = 300
@@ -122,7 +123,8 @@ class Sidebar(QScrollArea):
 
         self.device = None
         self.vad = None
-        if backend() == "faster":
+        self.gpu_panel = None
+        if gpu.nvidia_gpu():  # without an NVIDIA card there is nothing to choose
             self.device = QComboBox()
             for key, label in (("auto", "Automatic"), ("cpu", "CPU"), ("cuda", "GPU (NVIDIA CUDA)")):
                 self.device.addItem(tr(label), key)
@@ -131,6 +133,10 @@ class Sidebar(QScrollArea):
             form.addSpacing(4)
             form.addWidget(muted(tr("Compute on")))
             form.addWidget(self.device)
+            self.gpu_panel = GpuPanel()
+            form.addSpacing(6)
+            form.addWidget(self.gpu_panel)
+        if backend() == "faster":
             self.vad = Switch(settings.get("vad"))
             self.vad.toggled.connect(lambda on: settings.put("vad", on))
             vad_row = QHBoxLayout()

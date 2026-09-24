@@ -160,6 +160,7 @@ class TranscribeService(QObject):
         self._events = None
         self._busy = False
         self._loaded: tuple | None = None  # (model_id, device) the process has or is loading
+        self._stale = False  # replace the process once the running job is over
         self._timer = QTimer(self, interval=40, timeout=self._poll)
 
     def is_busy(self) -> bool:
@@ -180,6 +181,14 @@ class TranscribeService(QObject):
         self._ensure_process()
         self._loaded = (model_id, device)
         self._jobs.put(Warmup(model_id, device))
+
+    def restart(self) -> None:
+        """Replaces the worker process, which holds the CUDA libraries it found at startup:
+        after they are installed, or before they are deleted. A running job finishes first."""
+        if self._busy:
+            self._stale = True
+        else:
+            self._kill()
 
     def _ensure_process(self) -> None:
         from dictify.i18n import current_language
@@ -209,6 +218,7 @@ class TranscribeService(QObject):
 
     def _kill(self) -> None:
         self._loaded = None
+        self._stale = False
         if self._proc is not None:
             self._proc.kill()
             self._proc.join(3)
@@ -232,6 +242,8 @@ class TranscribeService(QObject):
             elif kind in ("finished", "failed"):
                 self._busy = False
                 self._timer.stop()
+                if self._stale:
+                    self._kill()
                 (self.finished if kind == "finished" else self.failed).emit(args[0])
                 return
         if self._busy and self._proc is not None and not self._proc.is_alive():

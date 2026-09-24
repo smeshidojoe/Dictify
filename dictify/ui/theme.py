@@ -170,6 +170,7 @@ def _stylesheet() -> str:
     #Toolbar {{ background: {t['bg']}; border-bottom: 1px solid transparent; }}
     #Toolbar[scrolled="true"] {{ border-bottom-color: {t['border']}; }}
     #PlayerBar {{ background: {t['bg']}; border-top: 1px solid {t['border']}; }}
+    #GpuCard {{ background: {t['bg']}; border: 1px solid {t['border']}; border-radius: 10px; }}
 
     QLabel {{ color: {t['text']}; background: transparent; }}
     QLabel#Muted {{ color: {t['muted']}; }}

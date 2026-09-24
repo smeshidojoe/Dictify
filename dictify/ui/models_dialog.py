@@ -1,5 +1,8 @@
-"""Lists Whisper models, shows which are downloaded and lets the user delete them."""
+"""Lists Whisper models (and the NVIDIA CUDA libraries, when installed), shows which are
+downloaded and lets the user delete them."""
 from __future__ import annotations
+
+from typing import Callable
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
@@ -13,6 +16,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from dictify import gpu
 from dictify.catalog import MODELS, delete_model, is_downloaded, model_path, repo_for
 from dictify.i18n import tr
 from dictify.paths import models_dir
@@ -20,11 +24,12 @@ from dictify.ui.widgets import muted, size_label
 
 
 class ModelsDialog(QDialog):
-    def __init__(self, busy_model: str | None = None, parent=None):
+    def __init__(self, busy_model: str | None = None, release_gpu: Callable[[], bool] | None = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle(tr("Models"))
         self.setMinimumWidth(520)
         self._busy = busy_model
+        self._release_gpu = release_gpu  # closes the libraries in the worker; False while it's busy
 
         intro = muted(tr("Models are downloaded automatically the first time you use them. "
                          "Larger models are more accurate but slower."))
@@ -67,6 +72,17 @@ class ModelsDialog(QDialog):
             delete.setEnabled(downloaded and spec.id != self._busy)
             delete.clicked.connect(lambda _=False, s=spec: self._delete(s))
             self.grid.addWidget(delete, r, 3)
+        if gpu.is_installed():
+            r = len(MODELS)
+            name = QLabel(f"<b>{tr('NVIDIA CUDA libraries')}</b>")
+            name.setToolTip(gpu.VERSION)
+            self.grid.addWidget(name, r, 0)
+            self.grid.addWidget(muted(size_label(gpu.installed_mb())), r, 1)
+            self.grid.addWidget(QLabel("✓ " + tr("installed")), r, 2)
+            delete = QPushButton(tr("Delete"))
+            delete.setEnabled(self._busy is None)
+            delete.clicked.connect(self._delete_gpu)
+            self.grid.addWidget(delete, r, 3)
 
     def _delete(self, spec) -> None:
         answer = QMessageBox.question(
@@ -77,3 +93,18 @@ class ModelsDialog(QDialog):
             if model_path(spec).exists():
                 QMessageBox.warning(self, tr("Delete model"), tr("Some files could not be removed. Close the app and try again."))
             self._fill()
+
+    def _delete_gpu(self) -> None:
+        answer = QMessageBox.question(
+            self, tr("NVIDIA CUDA libraries"),
+            tr("Delete the CUDA libraries? Transcription will run on the processor until you download them again."),
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if self._release_gpu is not None and not self._release_gpu():
+            QMessageBox.information(self, tr("NVIDIA CUDA libraries"), tr("Wait for the transcription to finish or cancel it first."))
+            return
+        gpu.delete()
+        if gpu.lib_dir().exists():
+            QMessageBox.warning(self, tr("NVIDIA CUDA libraries"), tr("Some files could not be removed. Close the app and try again."))
+        self._fill()
