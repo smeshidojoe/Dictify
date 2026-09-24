@@ -39,16 +39,23 @@ def run(argv: list[str]) -> int:
         audio = load_audio(audio_path)
         step("decode", seconds=round(len(audio) / SAMPLE_RATE, 2))
         engine = create_engine()
+        streamed = []
         segments, language = engine.transcribe(
             audio, model_path(spec), None,
-            report=lambda *_: None, on_segment=lambda _: None, is_cancelled=lambda: False,
+            report=lambda *_: None, on_segment=streamed.append, is_cancelled=lambda: False,
         )
         report["device"] = engine.device
+        report["streamed_segments"] = len(streamed)
+        report["words"] = [(round(w.start, 2), s.text[w.offset:].split(" ")[0]) for s in segments for w in s.words]
         report["language"] = language
         report["text"] = " ".join(s.text for s in segments)
         step("transcribe", segments=len(segments))
         if not segments:
             raise RuntimeError("no speech recognized")
+        if not streamed:
+            raise RuntimeError("no segments were streamed during transcription")
+        if not report["words"]:
+            raise RuntimeError("no word timestamps")
 
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PySide6.QtMultimedia import QMediaPlayer
