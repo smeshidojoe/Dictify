@@ -1,0 +1,116 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: Dictify-Windows-x64
+          - os: macos-14
+            artifact: Dictify-macOS-arm64
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      SAMPLE_TEXT: Hello and welcome. This is a test of the Dictify application.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: pip install -r requirements-win.txt -r requirements-dev.txt
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          pip install -r requirements-mac.txt -r requirements-dev.txt
+          pip install --no-deps mlx-whisper==0.4.3
+
+      - name: Unit tests
+        run: python -m pytest -q
+
+      - name: Build app
+        run: pyinstaller --noconfirm Dictify.spec
+
+      # Self-test the frozen app: real model download, transcription, UI, playback, exports.
+      - name: Self-test (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          say -o sample.aiff "$SAMPLE_TEXT"
+          dist/Dictify.app/Contents/MacOS/Dictify --selftest sample.aiff selftest-out tiny || true
+
+      - name: Self-test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Speech
+          $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+          $s.SetOutputToWaveFile("$PWD\sample.wav"); $s.Speak($env:SAMPLE_TEXT); $s.Dispose()
+          # Windowed exe: wait for it explicitly.
+          Start-Process dist\Dictify\Dictify.exe -ArgumentList "--selftest","sample.wav","selftest-out","tiny" -Wait -NoNewWindow
+
+      - name: Check self-test result
+        shell: python
+        run: |
+          import json, pathlib, sys
+          report = json.loads(pathlib.Path("selftest-out/selftest.json").read_text(encoding="utf-8"))
+          print(json.dumps(report, indent=2, ensure_ascii=False))
+          ok = report["ok"] and "welcome" in report.get("text", "").lower()
+          sys.exit(0 if ok else 1)
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir out
+          ditto -c -k --sequesterRsrc --keepParent dist/Dictify.app "out/${{ matrix.artifact }}.zip"
+          hdiutil create -volname Dictify -srcfolder dist/Dictify.app -ov -format UDZO "out/${{ matrix.artifact }}.dmg"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory out | Out-Null
+          Compress-Archive -Path dist\Dictify -DestinationPath "out\${{ matrix.artifact }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: out/*
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-${{ matrix.artifact }}
+          path: selftest-out/
+          retention-days: 7
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Dictify-*
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: Dictify-*
+          generate_release_notes: true

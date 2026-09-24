@@ -1,0 +1,229 @@
+"""Whisper backends: faster-whisper (Windows/Linux/Intel Mac) and mlx-whisper (Apple Silicon)."""
+from __future__ import annotations
+
+import logging
+import os
+import sys
+import types
+from pathlib import Path
+from typing import Callable
+
+import numpy as np
+
+from dictify.audio import SAMPLE_RATE
+from dictify.catalog import backend
+from dictify.errors import Cancelled
+from dictify.model import Segment
+
+log = logging.getLogger(__name__)
+
+# report(stage, fraction): stage is "load" or "transcribe"; fraction < 0 means indeterminate.
+Report = Callable[[str, float], None]
+OnSegment = Callable[[Segment], None]
+IsCancelled = Callable[[], bool]
+
+
+class FasterEngine:
+    """CTranslate2 backend. Uses CUDA when the NVIDIA libraries are present, CPU otherwise."""
+
+    def __init__(self) -> None:
+        self._model = None
+        self._key: tuple | None = None
+        self._cuda_broken = False
+        self.device = ""
+
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        model_dir: Path,
+        language: str | None,
+        *,
+        vad: bool = True,
+        device: str = "auto",
+        report: Report,
+        on_segment: OnSegment,
+        is_cancelled: IsCancelled,
+    ) -> tuple[list[Segment], str | None]:
+        for dev in self._devices(device):
+            emitted: list[Segment] = []
+            try:
+                lang = self._run(dev, audio, model_dir, language, vad, report, emitted, on_segment, is_cancelled)
+                self.device = dev
+                return emitted, lang
+            except Cancelled:
+                raise
+            except Exception:
+                # Missing cuBLAS/cuDNN only shows up at inference time; retry on CPU.
+                if dev == "cuda" and not emitted:
+                    log.warning("CUDA transcription failed, falling back to CPU", exc_info=True)
+                    self._cuda_broken = True
+                    self._model = self._key = None
+                    continue
+                raise
+        raise RuntimeError("No usable compute device")
+
+    def _devices(self, preference: str) -> list[str]:
+        if preference == "cpu" or self._cuda_broken:
+            return ["cpu"]
+        _add_cuda_dll_dirs()
+        import ctranslate2
+
+        if ctranslate2.get_cuda_device_count() > 0:
+            return ["cuda", "cpu"]
+        return ["cpu"]
+
+    def _run(self, device, audio, model_dir, language, vad, report, emitted, on_segment, is_cancelled):
+        report("load", -1)
+        model = self._load(model_dir, device)
+        if is_cancelled():
+            raise Cancelled()
+        report("transcribe", 0.0)
+        segments, info = model.transcribe(
+            audio,
+            language=language,
+            beam_size=5,
+            vad_filter=vad,
+            vad_parameters={"min_silence_duration_ms": 500},
+        )
+        duration = info.duration or len(audio) / SAMPLE_RATE
+        for seg in segments:
+            if is_cancelled():
+                raise Cancelled()
+            s = Segment(seg.start, seg.end, seg.text.strip())
+            if s.text:
+                emitted.append(s)
+                on_segment(s)
+            report("transcribe", min(1.0, seg.end / duration) if duration else -1)
+        return info.language
+
+    def _load(self, model_dir: Path, device: str):
+        key = (str(model_dir), device)
+        if self._key != key:
+            from faster_whisper import WhisperModel
+
+            self._model = None
+            log.info("Loading %s on %s", model_dir, device)
+            self._model = WhisperModel(
+                str(model_dir),
+                device=device,
+                compute_type="float16" if device == "cuda" else "int8",
+                cpu_threads=max(4, (os.cpu_count() or 4) // 2),
+            )
+            self._key = key
+        return self._model
+
+
+class MlxEngine:
+    """Apple Silicon backend running Whisper on the Metal GPU via MLX."""
+
+    device = "gpu"
+
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        model_dir: Path,
+        language: str | None,
+        *,
+        report: Report,
+        on_segment: OnSegment,
+        is_cancelled: IsCancelled,
+        **_ignored,
+    ) -> tuple[list[Segment], str | None]:
+        report("load", -1)
+        _stub_word_timing_deps()
+        import importlib
+
+        import mlx.core as mx
+        import mlx_whisper
+
+        if not mx.metal.is_available():
+            log.warning("Metal is not available, running MLX on the CPU")
+            mx.set_default_device(mx.cpu)
+            self.device = "cpu"
+
+        # mlx_whisper.transcribe is the function; the module holding the tqdm reference is here:
+        transcribe_module = importlib.import_module("mlx_whisper.transcribe")
+
+        class ProgressBar:
+            # Stands in for tqdm inside mlx_whisper to get progress and a cancellation point.
+            def __init__(self, total=None, **_kw):
+                self.total = total or 1
+                self.n = 0
+                report("transcribe", 0.0)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def update(self, n):
+                self.n += n
+                report("transcribe", min(1.0, self.n / self.total))
+                if is_cancelled():
+                    raise Cancelled()
+
+        transcribe_module.tqdm = types.SimpleNamespace(tqdm=ProgressBar)
+        if is_cancelled():
+            raise Cancelled()
+        result = mlx_whisper.transcribe(
+            audio,
+            path_or_hf_repo=str(model_dir),
+            language=language,
+            verbose=False,
+        )
+        segments = []
+        for raw in result.get("segments", []):
+            s = Segment(float(raw["start"]), float(raw["end"]), raw["text"].strip())
+            if s.text:
+                segments.append(s)
+                on_segment(s)
+        return segments, result.get("language")
+
+
+def create_engine():
+    return MlxEngine() if backend() == "mlx" else FasterEngine()
+
+
+def _stub_word_timing_deps() -> None:
+    """mlx_whisper imports numba and scipy at module level but only uses them for
+    word-level timestamps, which Dictify doesn't request. The app bundle leaves
+    them out (~200 MB), so provide inert stand-ins when they are missing."""
+    import importlib.util
+
+    if "numba" not in sys.modules and importlib.util.find_spec("numba") is None:
+        numba = types.ModuleType("numba")
+
+        def jit(*args, **kwargs):
+            if len(args) == 1 and callable(args[0]) and not kwargs:
+                return args[0]
+            return lambda fn: fn
+
+        numba.jit = jit
+        sys.modules["numba"] = numba
+    if "scipy" not in sys.modules and importlib.util.find_spec("scipy") is None:
+        scipy = types.ModuleType("scipy")
+        scipy.signal = types.ModuleType("scipy.signal")
+        sys.modules["scipy"] = scipy
+        sys.modules["scipy.signal"] = scipy.signal
+
+
+_cuda_dirs_added = False
+
+
+def _add_cuda_dll_dirs() -> None:
+    """Make pip-installed NVIDIA runtime libraries (nvidia-cublas-cu12, nvidia-cudnn-cu12)
+    visible to CTranslate2 on Windows."""
+    global _cuda_dirs_added
+    if _cuda_dirs_added or sys.platform != "win32":
+        return
+    _cuda_dirs_added = True
+    import site
+
+    roots = [Path(p) for p in site.getsitepackages()]
+    if getattr(sys, "frozen", False):
+        roots.append(Path(getattr(sys, "_MEIPASS", "")))
+    for root in roots:
+        for bin_dir in (root / "nvidia").glob("*/bin"):
+            os.add_dll_directory(str(bin_dir))
+            os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")

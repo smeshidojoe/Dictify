@@ -1,0 +1,10 @@
+# Apple Silicon. mlx-whisper itself must be installed without its dependencies, because it
+# declares torch/numba/scipy which Dictify doesn't need (they only serve word timestamps):
+#   pip install -r requirements-mac.txt
+#   pip install --no-deps mlx-whisper==0.4.3
+-r requirements.txt
+mlx>=0.25
+tiktoken
+tqdm
+more-itertools
+huggingface_hub
