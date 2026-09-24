@@ -23,9 +23,9 @@ jobs:
       SAMPLE_TEXT: Hello and welcome. This is a test of the Dictify application.
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -67,9 +67,21 @@ jobs:
         shell: python
         run: |
           import json, pathlib, sys
-          report = json.loads(pathlib.Path("selftest-out/selftest.json").read_text(encoding="utf-8"))
+
+          def annotate(level, text):
+              # Annotations are readable without signing in, unlike job logs.
+              text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::{level} title=selftest ${{ matrix.artifact }}::{text}")
+
+          path = pathlib.Path("selftest-out/selftest.json")
+          if not path.exists():
+              listing = "\n".join(str(p) for p in pathlib.Path(".").glob("selftest-out/**/*"))
+              annotate("error", "selftest.json missing; app did not finish.\n" + listing)
+              sys.exit(1)
+          report = json.loads(path.read_text(encoding="utf-8"))
           print(json.dumps(report, indent=2, ensure_ascii=False))
           ok = report["ok"] and "welcome" in report.get("text", "").lower()
+          annotate("notice" if ok else "error", json.dumps(report, indent=1, ensure_ascii=False))
           sys.exit(0 if ok else 1)
 
       - name: Package (macOS)
@@ -86,13 +98,13 @@ jobs:
           New-Item -ItemType Directory out | Out-Null
           Compress-Archive -Path dist\Dictify -DestinationPath "out\${{ matrix.artifact }}.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact }}
           path: out/*
           retention-days: 14
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: selftest-${{ matrix.artifact }}
@@ -106,7 +118,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           pattern: Dictify-*
           merge-multiple: true
