@@ -10,11 +10,12 @@ import re
 from bisect import bisect_right
 from collections import defaultdict
 
-from PySide6.QtCore import QMimeData, Qt, QTimer, Signal
+from PySide6.QtCore import QMimeData, QPointF, QPropertyAnimation, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QFont,
     QFontMetricsF,
     QKeySequence,
+    QPainter,
     QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
@@ -31,6 +32,11 @@ SEG = QTextFormat.Property.UserProperty + 1
 HEADER = -1
 MAX_TEXT_WIDTH = 760
 WHOLE_BLOCK = -1  # protection marker: the entire block is a timestamp header
+
+
+def _x(result) -> float:
+    # QTextLine.cursorToX returns (x, position) in PySide6.
+    return float(result[0] if isinstance(result, tuple) else result)
 
 
 def _sid(fmt: QTextCharFormat) -> int | None:
@@ -74,12 +80,18 @@ class TranscriptEditor(QTextEdit):
         self._current_key: tuple = (None, None)
         self._cur_pos: int | None = None
         self._cur_sels: list = []
+        self._word: tuple[int, int] | None = None  # document range of the spoken word
         self._search_sels: list = []
         self._query = ""
         self._hits: list[tuple[int, int]] = []
         self._hit = -1
         self._press = None
         self._side = -1
+
+        self._scroll = QPropertyAnimation(self.verticalScrollBar(), b"value", self)
+        self._scroll.setDuration(280)
+        self._scroll.setEasingCurve(theme.EASE_IN_OUT)
+        self.verticalScrollBar().sliderPressed.connect(self._scroll.stop)
 
         self.document().contentsChange.connect(self._on_contents_change)
         self._research = QTimer(self, singleShot=True, interval=250, timeout=self._rerun_search)
@@ -169,6 +181,8 @@ class TranscriptEditor(QTextEdit):
         self._current_key = (None, None)
         self._cur_pos = None
         self._cur_sels = []
+        self._word = None
+        self._scroll.stop()
         self.verticalScrollBar().setValue(scroll)
         if self._query:
             self._rerun_search()
@@ -282,16 +296,22 @@ class TranscriptEditor(QTextEdit):
         self._current = sid
         self._cur_sels = []
         self._cur_pos = None
+        self._word = None
         if sid is not None:
             rng = self._word_range(sid, word) if word is not None else None
-            fmt = QTextCharFormat()
-            fmt.setBackground(theme.c("current_word" if rng else "current"))
-            ranges = [rng] if rng else self._ensure_index()[3].get(sid, [])
-            for a, b in ranges:
-                self._cur_sels.append(self._selection(a, b, fmt))
-            if ranges:
-                self._cur_pos = ranges[0][0]
+            if rng:
+                self._word = rng  # painted as a rounded marker in paintEvent
+                self._cur_pos = rng[0]
+            else:
+                fmt = QTextCharFormat()
+                fmt.setBackground(theme.c("current"))
+                ranges = self._ensure_index()[3].get(sid, [])
+                for a, b in ranges:
+                    self._cur_sels.append(self._selection(a, b, fmt))
+                if ranges:
+                    self._cur_pos = ranges[0][0]
         self._apply_selections()
+        self.viewport().update()
         return True
 
     def scroll_to_current(self) -> None:
@@ -302,8 +322,57 @@ class TranscriptEditor(QTextEdit):
         rect = self.cursorRect(c)
         height = self.viewport().height()
         if rect.top() < 0 or rect.bottom() > height:
-            bar = self.verticalScrollBar()
-            bar.setValue(bar.value() + rect.top() - height // 3)
+            self.scroll_smoothly(self.verticalScrollBar().value() + rect.top() - height // 3)
+
+    def scroll_smoothly(self, value: int) -> None:
+        """Glides to a scroll position so the text doesn't jump under the reader's eyes."""
+        bar = self.verticalScrollBar()
+        value = max(bar.minimum(), min(bar.maximum(), value))
+        self._scroll.stop()
+        if value == bar.value():
+            return
+        if theme.reduced_motion() or not self.isVisible():
+            bar.setValue(value)
+            return
+        self._scroll.setStartValue(bar.value())
+        self._scroll.setEndValue(value)
+        self._scroll.start()
+
+    def _range_rects(self, start: int, end: int) -> list[QRectF]:
+        """Viewport rectangles covering a document range, one per laid-out line."""
+        doc = self.document()
+        block = doc.findBlock(start)
+        if not block.isValid():
+            return []
+        origin = doc.documentLayout().blockBoundingRect(block).topLeft()
+        origin -= QPointF(self.horizontalScrollBar().value(), self.verticalScrollBar().value())
+        layout = block.layout()
+        a, b = start - block.position(), end - block.position()
+        rects = []
+        for i in range(layout.lineCount()):
+            line = layout.lineAt(i)
+            lo, hi = line.textStart(), line.textStart() + line.textLength()
+            if b <= lo or a >= hi:
+                continue
+            x1, x2 = (_x(line.cursorToX(max(a, lo))), _x(line.cursorToX(min(b, hi))))
+            rects.append(QRectF(origin.x() + x1, origin.y() + line.y(), x2 - x1, line.height()))
+        return rects
+
+    def paintEvent(self, e):
+        if self._word:
+            # Drawn before the text, so it sits under the glyphs like a marker.
+            p = QPainter(self.viewport())
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(theme.c("word", 0.34 if theme.is_dark() else 0.2))
+            for r in self._range_rects(*self._word):
+                p.drawRoundedRect(r.adjusted(-3, -1, 3, 1), 5, 5)
+            p.end()
+        super().paintEvent(e)
+
+    def wheelEvent(self, e):
+        self._scroll.stop()  # the reader takes over
+        super().wheelEvent(e)
 
     def _selection(self, start: int, end: int, fmt: QTextCharFormat):
         sel = QTextEdit.ExtraSelection()

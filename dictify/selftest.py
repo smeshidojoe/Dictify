@@ -90,15 +90,15 @@ def run(argv: list[str]) -> int:
             if path.stat().st_size == 0:
                 raise RuntimeError(f"empty export: {fmt.key}")
         step("export")
-        window.ws.dirty = False
-        window.shutdown(ask=False)
+        window.shutdown()
 
         # The app transcribes in a separate process (spawned from the frozen executable).
         from dictify.worker import Job, TranscribeService
 
         service = TranscribeService()
-        got: dict = {"segments": 0}
+        got: dict = {"segments": 0, "stages": set()}
         service.segment.connect(lambda _s: got.update(segments=got["segments"] + 1))
+        service.stage.connect(lambda stage, *_: got["stages"].add(stage))
         service.finished.connect(lambda tr_: got.update(transcript=tr_))
         service.failed.connect(lambda msg: got.update(error=msg))
 
@@ -108,12 +108,17 @@ def run(argv: list[str]) -> int:
                 app.processEvents()
                 time.sleep(0.02)
 
+        # The app preloads the model; the job queued behind the warm-up must not load it again.
+        service.warm(model_id)
         service.run(Job(audio_path, model_id, None))
         wait(lambda: "transcript" in got or "error" in got, 180)
         if "transcript" not in got:
             raise RuntimeError(f"worker process: {got.get('error', 'timed out')}")
         report["worker_text"] = " ".join(s.text for s in got["transcript"].segments)
+        report["worker_stages"] = sorted(got["stages"])
         step("worker", streamed=got["segments"])
+        if "load" in got["stages"]:
+            raise RuntimeError("the preloaded model was loaded again for the job")
 
         # Cancel mid-job: use a long file so the job is surely still running (a fast GPU
         # finishes the short sample before the cancel would arrive).

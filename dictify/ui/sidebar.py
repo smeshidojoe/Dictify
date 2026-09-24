@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import replace
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, QUrl, Qt, Signal
+from PySide6.QtCore import QPropertyAnimation, QSize, QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -29,7 +28,8 @@ from dictify.formatting import MODE_SEGMENTS, MODE_TRANSCRIPT, ViewOptions, fmt_
 from dictify.i18n import SPEECH_LANGUAGES, UI_LANGUAGES, speech_language_name, tr
 from dictify.model import Transcript
 from dictify.paths import logs_dir
-from dictify.ui.widgets import ModeCard, Switch, muted, section_title, size_label
+from dictify.ui import theme
+from dictify.ui.widgets import ModeCard, ProgressLine, Switch, fade_in, muted, section_title, size_label
 
 WIDTH = 300
 PARAGRAPH_CHOICES = [("short", "Short"), ("medium", "Medium"), ("long", "Long"), ("none", "No paragraphs")]
@@ -54,8 +54,16 @@ def _minutes(seconds: float) -> str:
     return tr("~{n} min", n=round(seconds / 60))
 
 
+class _Body(QWidget):
+    # QScrollArea squeezes its widget down to the minimum size before it starts scrolling,
+    # which crushes combo boxes and wrapped labels; scroll as soon as it doesn't fit instead.
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+
 class Sidebar(QScrollArea):
     startRequested = Signal()
+    modelSettingsChanged = Signal()  # model or compute device picked
     cancelRequested = Signal()
     optionsChanged = Signal(object)  # ViewOptions
     manageModels = Signal()
@@ -74,7 +82,7 @@ class Sidebar(QScrollArea):
         self._state = "idle"
         self._anim: QPropertyAnimation | None = None
 
-        body = QWidget()
+        body = _Body()
         body.setObjectName("SidebarBody")
         body.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         body.setMinimumWidth(WIDTH - 12)  # keeps its layout while the panel slides; room for the scrollbar
@@ -91,7 +99,7 @@ class Sidebar(QScrollArea):
         self.models_btn.setFixedWidth(34)
         self.models_btn.clicked.connect(self.manageModels)
         self.refresh_models()
-        self.model.currentIndexChanged.connect(lambda: settings.put("model", self.model.currentData()))
+        self.model.currentIndexChanged.connect(self._on_model)
         model_row = QHBoxLayout()
         model_row.setSpacing(6)
         model_row.addWidget(self.model, 1)
@@ -119,7 +127,7 @@ class Sidebar(QScrollArea):
             for key, label in (("auto", "Automatic"), ("cpu", "CPU"), ("cuda", "GPU (NVIDIA CUDA)")):
                 self.device.addItem(tr(label), key)
             self.device.setCurrentIndex(max(0, self.device.findData(settings.get("device"))))
-            self.device.currentIndexChanged.connect(lambda: settings.put("device", self.device.currentData()))
+            self.device.currentIndexChanged.connect(self._on_device)
             form.addSpacing(4)
             form.addWidget(muted(tr("Compute on")))
             form.addWidget(self.device)
@@ -142,11 +150,11 @@ class Sidebar(QScrollArea):
 
         self.status = QWidget()
         status = QVBoxLayout(self.status)
-        status.setContentsMargins(0, 2, 0, 0)
-        status.setSpacing(5)
+        status.setContentsMargins(0, 4, 0, 0)
+        status.setSpacing(6)
         self.stage_label = QLabel()
-        self.bar = QProgressBar()
-        self.bar.setTextVisible(False)
+        self.stage_label.setObjectName("Stage")
+        self.bar = ProgressLine()
         self.detail = muted()
         self.detail.setWordWrap(True)
         status.addWidget(self.stage_label)
@@ -274,7 +282,7 @@ class Sidebar(QScrollArea):
     def slide(self, show: bool) -> None:
         if self._anim:
             self._anim.stop()
-        if not self.window().isVisible():  # nothing to animate before the window is shown
+        if not self.window().isVisible() or theme.reduced_motion():
             self.setMaximumWidth(WIDTH if show else 0)
             self.setVisible(show)
             return
@@ -285,8 +293,8 @@ class Sidebar(QScrollArea):
                 self.setMaximumWidth(0)
                 self.show()
         anim = QPropertyAnimation(self, b"maximumWidth", self)
-        anim.setDuration(220)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setDuration(260)
+        anim.setEasingCurve(theme.EASE_DRAWER)
         anim.setStartValue(self.maximumWidth())
         anim.setEndValue(WIDTH if show else 0)
         if not show:
@@ -312,6 +320,14 @@ class Sidebar(QScrollArea):
         self.model.setCurrentIndex(max(0, self.model.findData(current)))
         self.model.blockSignals(False)
 
+    def _on_model(self) -> None:
+        settings.put("model", self.model.currentData())
+        self.modelSettingsChanged.emit()
+
+    def _on_device(self) -> None:
+        settings.put("device", self.device.currentData())
+        self.modelSettingsChanged.emit()
+
     def job_settings(self) -> dict:
         language = self.language.currentData()
         return {
@@ -333,7 +349,10 @@ class Sidebar(QScrollArea):
         self.action.setObjectName("" if state == "running" else "Primary")
         self.action.style().unpolish(self.action)
         self.action.style().polish(self.action)
+        was_running = self.status.isVisible()
         self.status.setVisible(state == "running")
+        if state == "running" and not was_running:
+            fade_in(self.status)
         if state == "running":
             self._run_started = time.monotonic()
             self._stage = ""
@@ -346,11 +365,7 @@ class Sidebar(QScrollArea):
             self.stage_label.setText(tr(STAGES.get(stage, stage)))
         self._fraction = fraction
         self._extra = detail
-        if fraction < 0:
-            self.bar.setRange(0, 0)
-        else:
-            self.bar.setRange(0, 1000)
-            self.bar.setValue(int(fraction * 1000))
+        self.bar.set_fraction(fraction)
         self.refresh_detail()
 
     def refresh_detail(self) -> None:
@@ -381,16 +396,22 @@ class Sidebar(QScrollArea):
         return self._opts
 
     def set_view_visible(self, on: bool) -> None:
+        appearing = on and not self.view.isVisible()
         self.view.setVisible(on)
+        if appearing:
+            fade_in(self.view)
 
     def set_info(self, t: Transcript | None) -> None:
         while self.info.count():
             item = self.info.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        appearing = t is not None and self.info_box.isHidden()
         self.info_box.setVisible(t is not None)
         if t is None:
             return
+        if appearing:
+            fade_in(self.info_box)
         rows = [
             (tr("Duration"), fmt_time(t.duration, t.duration >= 3600)),
             (tr("Language"), speech_language_name(t.language)),

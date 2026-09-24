@@ -26,12 +26,12 @@ from PySide6.QtWidgets import (
 from dictify import APP_NAME, exporters, settings
 from dictify.formatting import ViewOptions, to_text
 from dictify.i18n import tr
-from dictify.model import WORD_LEAD_IN, Segment, Transcript
+from dictify.model import Segment, Transcript
 from dictify.ui import icons
 from dictify.ui.editor import TranscriptEditor
 from dictify.ui.player import PlayerBar
 from dictify.ui.sidebar import Sidebar
-from dictify.ui.widgets import DropOverlay, DropZone, Toast, muted
+from dictify.ui.widgets import DropOverlay, DropZone, Toast, crossfade, muted
 
 log = logging.getLogger(__name__)
 
@@ -52,9 +52,9 @@ class Workspace(QWidget):
         self.path: str | None = None
         self.t: Transcript | None = None  # finished transcript
         self.live: Transcript | None = None  # transcript being filled while running
-        self.dirty = False
-        self._starts: list[float] | None = None
-        self._visible: list[int] = []
+        self._starts: list[float] | None = None  # playback timeline, see _timeline()
+        self._keys: list[tuple[int, int | None]] = []
+        self._pin: tuple[tuple[int, int], float] | None = None  # clicked word, until it's reached
 
         # ----- toolbar -------------------------------------------------------------------
         self.bar = bar = QWidget()
@@ -62,7 +62,7 @@ class Workspace(QWidget):
         bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         bar.setFixedHeight(52)
         self.toolbar_layout = tb = QHBoxLayout(bar)
-        tb.setContentsMargins(10, 8, 10, 8)
+        tb.setContentsMargins(12, 8, 10, 8)
         tb.setSpacing(8)
 
         self.title = QLabel(APP_NAME)
@@ -117,7 +117,7 @@ class Workspace(QWidget):
         self.drop.fileDropped.connect(self.fileChosen)
         drop_page = QWidget()
         drop_layout = QVBoxLayout(drop_page)
-        drop_layout.setContentsMargins(16, 16, 16, 16)
+        drop_layout.setContentsMargins(20, 12, 20, 20)
         drop_layout.addWidget(self.drop, 1)
 
         self.editor = TranscriptEditor()
@@ -158,6 +158,7 @@ class Workspace(QWidget):
         self.editor.edited.connect(self._on_edited)
         self.editor.editingChanged.connect(self.edit_btn.setChecked)
         self.editor.searchChanged.connect(self._on_search_result)
+        self.editor.verticalScrollBar().valueChanged.connect(self._update_edge)
         self.player.positionChanged.connect(self._on_position)
         self.sidebar.optionsChanged.connect(self._on_options)
 
@@ -182,12 +183,13 @@ class Workspace(QWidget):
 
     def show_empty(self) -> None:
         self.path = self.t = self.live = None
-        self.dirty = False
         self.player.unload()
         self.player.hide()
         self.editor.set_editing(False)
         self.title.setText(APP_NAME)
-        self.stack.setCurrentIndex(0)
+        crossfade(self.stack, 0)
+        self._update_edge()
+        self.toast.bottom_margin = 24
         self._clock.stop()
         self._show_actions(False)
         self._show_search(False)
@@ -202,13 +204,14 @@ class Workspace(QWidget):
         """A new file: show it, load the player and slide the sidebar in."""
         self.path = path
         self.t = self.live = None
-        self.dirty = False
+        self._pin = None
         self.title.setText(Path(path).name)
         self.editor.set_editing(False)
         self.editor.set_transcript(Transcript(path, duration=duration), self.opts)
         self.editor.setPlaceholderText(tr("Press “Transcribe” to start."))
-        self.stack.setCurrentIndex(1)
+        crossfade(self.stack, 1)
         self.player.show()
+        self.toast.bottom_margin = self.player.height() + 16
         self.player.load(path, duration)
         self._show_actions(False)
         self._show_search(False)
@@ -243,7 +246,6 @@ class Workspace(QWidget):
     def set_transcript(self, t: Transcript) -> None:
         self._end_run()
         self.t = t
-        self.dirty = True
         self.editor.set_transcript(t, self.opts)
         self._starts = None
         self._show_actions(True)
@@ -283,7 +285,7 @@ class Workspace(QWidget):
         self.editor.render(self.opts)
         self._starts = None
         if follow:
-            bar.setValue(bar.maximum())
+            self.editor.scroll_smoothly(bar.maximum())
 
     def _toggle_sidebar(self, on: bool) -> None:
         self.sidebar.slide(on)
@@ -292,11 +294,17 @@ class Workspace(QWidget):
     def show_drop_overlay(self, on: bool) -> None:
         """Highlights the text area while a file is dragged over a loaded transcript."""
         if on and self.stack.currentIndex() == 1:
-            self.overlay.setGeometry(self.stack.rect())
-            self.overlay.raise_()
-            self.overlay.show()
+            self.overlay.appear()
         else:
-            self.overlay.hide()
+            self.overlay.disappear()
+
+    def _update_edge(self, *_) -> None:
+        # The toolbar hairline only shows once text scrolls under it (like macOS toolbars).
+        scrolled = self.stack.currentIndex() == 1 and self.editor.verticalScrollBar().value() > 0
+        if self.bar.property("scrolled") != scrolled:
+            self.bar.setProperty("scrolled", scrolled)
+            self.bar.style().unpolish(self.bar)
+            self.bar.style().polish(self.bar)
 
     def _show_actions(self, on: bool) -> None:
         for w in (self.edit_btn, self.copy_btn, self.export_btn):
@@ -314,6 +322,8 @@ class Workspace(QWidget):
         self.next_btn.setIcon(icons.chevron_down())
         self.sidebar_btn.setIcon(icons.sidebar())
         self.edit_btn.setIcon(icons.pencil())
+        self.copy_btn.setIcon(icons.copy())
+        self.export_btn.setIcon(icons.export())
         self.search.removeAction(self._search_action)
         self._search_action = self.search.addAction(icons.search(), QLineEdit.ActionPosition.LeadingPosition)
         self.sidebar_btn.setIconSize(QSize(18, 18))
@@ -343,7 +353,6 @@ class Workspace(QWidget):
             return
         self.editor.sync()
         QApplication.clipboard().setText(to_text(self.t, self.opts))
-        self.dirty = False
         self.toast.show_message(tr("Transcript copied to clipboard"))
 
     def export(self, fmt: exporters.ExportFormat) -> None:
@@ -368,31 +377,43 @@ class Workspace(QWidget):
             QMessageBox.warning(self, tr("Export failed"), str(e))
             return
         settings.put("last_dir", str(Path(path).parent))
-        self.dirty = False
         self.toast.show_message(tr("Saved {name}", name=Path(path).name))
 
     # ----- playback sync ---------------------------------------------------------------------
 
-    def _seg_at_time(self, seconds: float) -> int | None:
-        t = self.current()
-        if t is None:
-            return None
+    def _timeline(self) -> tuple[list[float], list[tuple[int, int | None]]]:
+        """Every word in playback order: start times and (segment, word index). Segments
+        without word timings (edited ones) appear once, as a whole."""
         if self._starts is None:
-            self._visible = t.visible()
-            self._starts = [t.segments[i].start for i in self._visible]
-        k = bisect_right(self._starts, seconds + 0.05) - 1
-        return self._visible[k] if k >= 0 else None
+            t = self.current()
+            items = []
+            for i in t.visible():
+                seg = t.segments[i]
+                if seg.words:
+                    items += [(w.start, i, k) for k, w in enumerate(seg.words)]
+                else:
+                    items.append((seg.start, i, None))
+            items.sort(key=lambda item: item[0])
+            self._starts = [item[0] for item in items]
+            self._keys = [(i, k) for _, i, k in items]
+        return self._starts, self._keys
 
     def _on_position(self, seconds: float) -> None:
         t = self.current()
         if t is None:
             return
-        sid = self._seg_at_time(seconds)
-        word = None
-        if sid is not None and t.segments[sid].words:
-            starts = [w.start for w in t.segments[sid].words]
-            # Playback of a clicked word starts WORD_LEAD_IN early; highlight that word already.
-            word = max(0, bisect_right(starts, seconds + WORD_LEAD_IN + 0.03) - 1)
+        starts, keys = self._timeline()
+        # The spoken word is the last one that has started. Through a pause the highlight
+        # stays on the word just said instead of jumping ahead to one not yet spoken.
+        k = bisect_right(starts, seconds + 0.02) - 1
+        sid, word = keys[k] if k >= 0 else (None, None)
+        if self._pin is not None:
+            # Playback of a clicked word starts a moment early; show that word meanwhile.
+            key, start = self._pin
+            if start - 1.0 <= seconds < start:
+                sid, word = key
+            else:
+                self._pin = None
         if self.editor.set_current(sid, word) and self.player.is_playing():
             self.editor.scroll_to_current()
 
@@ -401,13 +422,15 @@ class Workspace(QWidget):
         if t is None:
             return
         self.editor.sync()
-        self.player.seek(t.segments[sid].time_at(offset))
-        self._on_position(t.segments[sid].time_at(offset))
+        seg = t.segments[sid]
+        k = seg.word_at(offset)
+        self._pin = ((sid, k), seg.words[k].start) if k is not None else None
+        self.player.seek(seg.time_at(offset))
+        self._on_position(seg.time_at(offset))
         if not self.player.is_playing():
             self.player.toggle()
 
     def _on_edited(self) -> None:
-        self.dirty = True
         self._starts = None
 
     def _on_edit_toggled(self, on: bool) -> None:

@@ -26,8 +26,17 @@ def _icon(draw: Callable[[QPainter, float], None], size: int = 18, color: str = 
     return QIcon(pm)
 
 
-def chevron_left(color="text") -> QIcon:
-    return _icon(lambda p, s: p.drawPolyline([QPointF(11, 4), QPointF(6, 9), QPointF(11, 14)]), color=color)
+def chevron_file(direction: str, color: str = "muted") -> str:
+    """A chevron saved as a PNG for stylesheets (QSS takes images only by file path)."""
+    from dictify.paths import data_dir
+
+    folder = data_dir() / "ui"
+    folder.mkdir(exist_ok=True)
+    path = folder / f"chevron-{direction}-{theme.hexc(color).lstrip('#')}.png"
+    if not path.exists():
+        icon = chevron_up(color) if direction == "up" else chevron_down(color)
+        icon.pixmap(48, 48).save(str(path))
+    return path.as_posix()
 
 
 def chevron_up(color="text") -> QIcon:
@@ -63,6 +72,24 @@ def pencil(color="text") -> QIcon:
         path.lineTo(6.7, 13.8)
         path.closeSubpath()
         p.drawPath(path)
+
+    return _icon(draw, color=color)
+
+
+def copy(color="text") -> QIcon:
+    def draw(p, s):
+        p.drawRoundedRect(QRectF(6.5, 6.5, 8.5, 8.5), 2, 2)
+        p.drawPolyline([QPointF(11.5, 3.5), QPointF(5, 3.5), QPointF(3.5, 5), QPointF(3.5, 11.5)])
+
+    return _icon(draw, color=color)
+
+
+def export(color="text") -> QIcon:
+    def draw(p, s):
+        p.drawLine(QPointF(9, 2.8), QPointF(9, 11))
+        p.drawPolyline([QPointF(5.8, 6), QPointF(9, 2.8), QPointF(12.2, 6)])
+        p.drawPolyline([QPointF(6, 8.5), QPointF(4, 8.5), QPointF(4, 15), QPointF(14, 15), QPointF(14, 8.5),
+                        QPointF(12, 8.5)])
 
     return _icon(draw, color=color)
 

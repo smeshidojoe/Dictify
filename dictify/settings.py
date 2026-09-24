@@ -8,7 +8,7 @@ from dictify.catalog import DEFAULT_MODEL
 from dictify.formatting import ViewOptions
 
 _DEFAULTS = {
-    "ui_language": "system",
+    "ui_language": "en",
     "model": DEFAULT_MODEL,
     "language": "auto",
     "vad": True,

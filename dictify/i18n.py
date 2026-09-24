@@ -3,7 +3,7 @@ from __future__ import annotations
 
 _lang = "en"
 
-UI_LANGUAGES = [("system", "System"), ("en", "English"), ("ru", "Русский")]
+UI_LANGUAGES = [("en", "English"), ("ru", "Русский"), ("system", "System")]
 
 # Spoken languages offered for transcription (Whisper codes). Endonyms need no translation.
 SPEECH_LANGUAGES = [
@@ -140,9 +140,6 @@ RU = {
     "File not found:\n{path}": "Файл не найден:\n{path}",
     "No speech was recognized in this file.": "В этом файле не удалось распознать речь.",
     "Transcription failed": "Ошибка распознавания",
-    "The transcript hasn't been exported or copied.": "Текст ещё не экспортирован и не скопирован.",
-    "Discard it?": "Удалить его?",
-    "Discard": "Удалить",
     "The file has no audio track or its format is not supported.":
         "В файле нет звуковой дорожки, или его формат не поддерживается.",
     "Could not download the model. Check your internet connection.":

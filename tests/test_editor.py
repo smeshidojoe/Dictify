@@ -215,11 +215,18 @@ def test_highlights_current_word(qapp, transcript):
     transcript.segments[2].text, transcript.segments[2].words = text, words
     ed = make(qapp, transcript)
     ed.set_editing(False)
+    plain = ed.toPlainText()
+
+    def marked():
+        a, b = ed._word
+        return plain[a:b]
+
     assert ed.set_current(2, 1) is True
-    sel = ed.extraSelections()
-    assert len(sel) == 1 and sel[0].cursor.selectedText() == "love"
+    assert marked() == "love" and not ed.extraSelections()
+    rects = ed._range_rects(*ed._word)
+    assert len(rects) == 1 and rects[0].width() > 10
     ed.set_current(2, 4)
-    assert ed.extraSelections()[0].cursor.selectedText() == "people."
+    assert marked() == "people."
     # no word timings -> whole segment
     ed.set_current(3, None)
     assert ed.extraSelections()[0].cursor.selectedText().strip() == "I was a teacher."

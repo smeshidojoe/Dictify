@@ -21,13 +21,18 @@ class Segment:
     text: str
     words: list[Word] = field(default_factory=list)
 
+    def word_at(self, offset: int) -> int | None:
+        """Index of the word containing the character at `offset` (None without word timings)."""
+        if not self.words:
+            return None
+        return max(0, bisect_right([w.offset for w in self.words], offset) - 1)
+
     def time_at(self, offset: int) -> float:
         """Media time of the character at `offset` in the segment text: the word's own
         timestamp when known, otherwise interpolated across the segment."""
-        if self.words:
-            k = bisect_right([w.offset for w in self.words], offset) - 1
-            word = self.words[max(0, k)]
-            return max(self.start, word.start - WORD_LEAD_IN)
+        k = self.word_at(offset)
+        if k is not None:
+            return max(0.0, self.words[k].start - WORD_LEAD_IN)
         if not self.text:
             return self.start
         share = min(1.0, max(0.0, offset / len(self.text)))

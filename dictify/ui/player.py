@@ -3,15 +3,14 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QSize, Qt, QUrl, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMenu, QToolButton, QWidget
 
 from dictify.formatting import fmt_time
 from dictify.i18n import tr
-from dictify.ui import icons
-from dictify.ui.widgets import SeekSlider
+from dictify.ui.widgets import PlayButton, SeekSlider
 
 log = logging.getLogger(__name__)
 RATES = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
@@ -36,10 +35,7 @@ class PlayerBar(QWidget):
         self._dragging = False
         self._fallback_duration = 0.0
 
-        self.play_btn = QToolButton()
-        self.play_btn.setFixedSize(38, 38)
-        self.play_btn.setIconSize(QSize(22, 22))
-        self.play_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.play_btn = PlayButton()
         self.play_btn.setToolTip(tr("Play / pause (Space)"))
         self.play_btn.clicked.connect(self.toggle)
 
@@ -68,8 +64,8 @@ class PlayerBar(QWidget):
         self.speed.setText(_rate_label(1.0))
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(12, 8, 16, 8)
-        row.setSpacing(12)
+        row.setContentsMargins(14, 8, 16, 8)
+        row.setSpacing(14)
         row.addWidget(self.play_btn)
         row.addWidget(self.slider, 1)
         row.addWidget(self.time)
@@ -118,7 +114,7 @@ class PlayerBar(QWidget):
         self._update_icon()
 
     def _update_icon(self, *_):
-        self.play_btn.setIcon(icons.pause() if self.is_playing() else icons.play())
+        self.play_btn.set_playing(self.is_playing())
 
     def _duration_ms(self) -> int:
         return self.player.duration() or int(self._fallback_duration * 1000)

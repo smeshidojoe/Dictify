@@ -11,7 +11,8 @@ def test_build_words_offsets():
 def test_time_at_uses_word_start():
     text, words = build_words([(" one", 10.0, 10.5), (" two", 11.0, 11.5), (" three", 12.0, 12.8)])
     seg = Segment(10.0, 13.0, text, words)
-    assert seg.time_at(0) == 10.0
+    assert seg.time_at(0) == 10.0 - WORD_LEAD_IN
+    assert seg.word_at(0) == 0 and seg.word_at(text.index("two") + 1) == 1
     assert seg.time_at(text.index("two") + 1) == 11.0 - WORD_LEAD_IN
     assert seg.time_at(len(text)) == 12.0 - WORD_LEAD_IN
 

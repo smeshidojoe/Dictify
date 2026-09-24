@@ -4,12 +4,13 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Signal
+from PySide6.QtCore import QEvent, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
 
 from dictify import APP_NAME, settings
 from dictify.audio import probe_duration
+from dictify.catalog import get_model, is_downloaded
 from dictify.i18n import tr
 from dictify.ui import chrome, theme
 from dictify.ui.models_dialog import ModelsDialog
@@ -34,6 +35,7 @@ class MainWindow(QMainWindow):
         self.chrome = chrome.create(self, self.ws)
 
         self._job: Job | None = None
+        self._shown = False
         self._duration = 0.0
         self._service = TranscribeService(self)
         self._service.stage.connect(self.ws.set_stage)
@@ -47,6 +49,9 @@ class MainWindow(QMainWindow):
         self.ws.sidebar.cancelRequested.connect(self._service.cancel)
         self.ws.sidebar.manageModels.connect(self._show_models)
         self.ws.sidebar.uiLanguageChanged.connect(self._on_ui_language)
+        # Keep the chosen model loaded in the worker, so "Transcribe" starts right away.
+        self._warm_timer = QTimer(self, singleShot=True, interval=800, timeout=self._warm_up)
+        self.ws.sidebar.modelSettingsChanged.connect(self._warm_timer.start)
         QGuiApplication.styleHints().colorSchemeChanged.connect(self._on_theme)
 
     # ----- flow --------------------------------------------------------------------------
@@ -58,8 +63,6 @@ class MainWindow(QMainWindow):
         if not Path(path).is_file():
             QMessageBox.warning(self, APP_NAME, tr("File not found:\n{path}", path=path))
             return
-        if not self._confirm_discard():
-            return
         settings.put("last_dir", str(Path(path).parent))
         self._duration = probe_duration(path)
         self.ws.load_media(path, self._duration)
@@ -68,8 +71,6 @@ class MainWindow(QMainWindow):
 
     def start_job(self) -> None:
         if self._job is not None or not self.ws.path:
-            return
-        if self.ws.t is not None and not self._confirm_discard():
             return
         self._job = Job(path=self.ws.path, **self.ws.sidebar.job_settings())
         self.ws.begin_live(self._duration)
@@ -95,23 +96,18 @@ class MainWindow(QMainWindow):
     def _on_cancelled(self) -> None:
         self._job_done()
         self.ws.end_run_without_result()
+        self._warm_timer.start()  # cancelling killed the process, and the model with it
+
+    def _warm_up(self) -> None:
+        if self._job is not None:
+            return
+        job = self.ws.sidebar.job_settings()
+        if is_downloaded(get_model(job["model_id"])):
+            self._service.warm(job["model_id"], job["device"])
 
     def _show_models(self) -> None:
         ModelsDialog(self._job.model_id if self._job else None, self).exec()
         self.ws.sidebar.refresh_models()
-
-    def _confirm_discard(self) -> bool:
-        if not (self.ws.t and self.ws.dirty):
-            return True
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Question)
-        box.setWindowTitle(APP_NAME)
-        box.setText(tr("The transcript hasn't been exported or copied."))
-        box.setInformativeText(tr("Discard it?"))
-        discard = box.addButton(tr("Discard"), QMessageBox.ButtonRole.DestructiveRole)
-        box.addButton(tr("Cancel"), QMessageBox.ButtonRole.RejectRole)
-        box.exec()
-        return box.clickedButton() is discard
 
     def _on_ui_language(self) -> None:
         # Rebuilding the window would drop a loaded file, so only do it when nothing is open.
@@ -134,6 +130,9 @@ class MainWindow(QMainWindow):
     def showEvent(self, e):
         super().showEvent(e)
         self.chrome.on_show()
+        if not self._shown:
+            self._shown = True
+            self._warm_timer.start(1500)  # after the window is up, not competing with startup
 
     def changeEvent(self, e):
         super().changeEvent(e)
@@ -145,7 +144,7 @@ class MainWindow(QMainWindow):
             e.acceptProposedAction()
             self.ws.show_drop_overlay(True)
 
-    def dragLeaveEvent(self, e):
+    def dragLeaveEvent(self, _e):
         self.ws.show_drop_overlay(False)
 
     def dropEvent(self, e):
@@ -156,14 +155,10 @@ class MainWindow(QMainWindow):
             self.open_file(urls[0].toLocalFile())
 
     def closeEvent(self, e):
-        if not self.shutdown(ask=True):
-            e.ignore()
-            return
+        self.shutdown()
         super().closeEvent(e)
 
-    def shutdown(self, ask: bool) -> bool:
-        if ask and not self._confirm_discard():
-            return False
+    def shutdown(self) -> None:
+        self._warm_timer.stop()
         self.ws.player.unload()
         self._service.shutdown()
-        return True

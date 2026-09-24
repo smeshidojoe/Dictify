@@ -76,8 +76,26 @@ class FasterEngine:
             return ["cuda", "cpu"]
         return ["cpu"]
 
+    def warm(self, model_dir: Path, device: str = "auto") -> None:
+        """Loads the model ahead of the first job, so starting a transcription is instant."""
+        for dev in self._devices(device):
+            try:
+                model = self._load(model_dir, dev)
+                if dev == "cuda":
+                    # Missing cuBLAS/cuDNN only shows up at inference time: find out now,
+                    # not in the first job (which would then load the model again on CPU).
+                    model.detect_language(np.zeros(SAMPLE_RATE, dtype=np.float32))
+                return
+            except Exception:
+                if dev != "cuda":
+                    raise
+                log.warning("CUDA is not usable, preloading on CPU", exc_info=True)
+                self._cuda_broken = True
+                self._model = self._key = None
+
     def _run(self, device, audio, model_dir, language, vad, report, emitted, on_segment, is_cancelled):
-        report("load", -1)
+        if self._key != (str(model_dir), device):
+            report("load", -1)
         model = self._load(model_dir, device)
         if is_cancelled():
             raise Cancelled()
@@ -135,20 +153,10 @@ class MlxEngine:
         is_cancelled: IsCancelled,
         **_ignored,
     ) -> tuple[list[Segment], str | None]:
-        report("load", -1)
-        _stub_word_timing_deps()
-        import importlib
-
-        import mlx.core as mx
-        import mlx_whisper
-
-        if not mx.metal.is_available():
-            log.warning("Metal is not available, running MLX on the CPU")
-            mx.set_default_device(mx.cpu)
-            self.device = "cpu"
-
-        # mlx_whisper.transcribe is the function; the module holding the tqdm reference is here:
-        transcribe_module = importlib.import_module("mlx_whisper.transcribe")
+        _, mlx_whisper, transcribe_module = self._modules()
+        holder = transcribe_module.ModelHolder
+        if holder.model is None or holder.model_path != str(model_dir):
+            report("load", -1)
 
         class ProgressBar:
             # Stands in for tqdm inside mlx_whisper to get progress and a cancellation point.
@@ -170,9 +178,6 @@ class MlxEngine:
                     raise Cancelled()
 
         transcribe_module.tqdm = types.SimpleNamespace(tqdm=ProgressBar)
-        timing_module = importlib.import_module("mlx_whisper.timing")
-        timing_module.dtw = align.dtw
-        timing_module.median_filter = align.median_filter
         if is_cancelled():
             raise Cancelled()
 
@@ -195,6 +200,29 @@ class MlxEngine:
             if s.text:
                 segments.append(s)
         return segments, result.get("language")
+
+    def warm(self, model_dir: Path, device: str = "auto") -> None:
+        """Loads the model ahead of the first job (mlx_whisper keeps it in ModelHolder)."""
+        mx, _, transcribe_module = self._modules()
+        transcribe_module.ModelHolder.get_model(str(model_dir), mx.float16)
+
+    def _modules(self):
+        _stub_word_timing_deps()
+        import importlib
+
+        import mlx.core as mx
+        import mlx_whisper
+
+        if self.device == "gpu" and not mx.metal.is_available():
+            log.warning("Metal is not available, running MLX on the CPU")
+            mx.set_default_device(mx.cpu)
+            self.device = "cpu"
+        # mlx_whisper.transcribe is the function; the module holding ModelHolder and tqdm is here:
+        transcribe_module = importlib.import_module("mlx_whisper.transcribe")
+        timing_module = importlib.import_module("mlx_whisper.timing")
+        timing_module.dtw = align.dtw
+        timing_module.median_filter = align.median_filter
+        return mx, mlx_whisper, transcribe_module
 
 
 def _segment(start: float, end: float, text: str, pieces: list[tuple[str, float, float]]) -> Segment:

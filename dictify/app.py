@@ -90,7 +90,7 @@ def main() -> None:
     def rebuild(old):
         # Switching the interface language recreates the window (only offered on the start screen).
         geometry = old.geometry()
-        old.shutdown(ask=False)
+        old.shutdown()
         old.hide()
         old.deleteLater()
         build_window(geometry)

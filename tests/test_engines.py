@@ -35,7 +35,18 @@ def fake_mlx(monkeypatch):
             ],
         }
 
+    class ModelHolder:
+        model = None
+        model_path = None
+
+        @classmethod
+        def get_model(cls, model_path, dtype):
+            calls["loaded"] = (model_path, dtype)
+            cls.model, cls.model_path = object(), model_path
+            return cls.model
+
     module.transcribe = transcribe
+    module.ModelHolder = ModelHolder
     package = types.ModuleType("mlx_whisper")
     package.transcribe = transcribe  # like the real package: the function shadows the submodule
     monkeypatch.setitem(sys.modules, "mlx_whisper", package)
@@ -46,6 +57,7 @@ def fake_mlx(monkeypatch):
     core = types.ModuleType("mlx.core")
     core.metal = types.SimpleNamespace(is_available=lambda: calls.get("metal", True))
     core.cpu = "cpu"
+    core.float16 = "float16"
     core.set_default_device = lambda d: calls.update(default_device=d)
     mlx = types.ModuleType("mlx")
     mlx.core = core
@@ -137,3 +149,16 @@ def test_mlx_engine_falls_back_to_cpu_without_metal(fake_mlx, tmp_path):
     )
     assert fake_mlx["default_device"] == "cpu"
     assert engine.device == "cpu"
+
+
+def test_mlx_engine_warm_loads_model_once(fake_mlx, tmp_path):
+    from dictify.engines import MlxEngine
+
+    engine = MlxEngine()
+    engine.warm(tmp_path)
+    assert fake_mlx["loaded"] == (str(tmp_path), "float16")
+    stages = []
+    engine.transcribe(np.zeros(16000, np.float32), tmp_path, None,
+                      report=lambda stage, f: stages.append(stage), on_segment=lambda s: None,
+                      is_cancelled=lambda: False)
+    assert "load" not in stages  # already warm: no "Loading model…" flash

@@ -1,6 +1,7 @@
 """Transcription runs in a separate process.
 
-The process stays alive between jobs so the loaded model stays warm, and cancelling
+The process stays alive while the app is open and keeps the selected model loaded (it is
+warmed up ahead of the first job), so starting a transcription is instant. Cancelling
 simply kills it: model inference sits in native code for seconds at a time and can't be
 interrupted from Python, but a killed process stops (and frees the CPU/GPU) at once.
 """
@@ -26,6 +27,14 @@ class Job:
     device: str = "auto"
 
 
+@dataclass
+class Warmup:
+    """Load a model ahead of time; ignored when it isn't downloaded yet."""
+
+    model_id: str
+    device: str = "auto"
+
+
 # ----- child process ------------------------------------------------------------------------
 
 
@@ -38,6 +47,7 @@ def run_job(job: Job, engine, emit) -> None:
     from dictify.errors import NoAudioError
     from dictify.i18n import tr
     from dictify.model import Transcript
+    from dictify.timing import snap_word_starts, voiced_frames
 
     never = lambda: False  # noqa: E731 - cancelling kills the process instead
     try:
@@ -54,6 +64,12 @@ def run_job(job: Job, engine, emit) -> None:
         emit("stage", "decode", 0.0, "")
         audio = load_audio(job.path, lambda f: emit("stage", "decode", f, ""), never)
         duration = len(audio) / SAMPLE_RATE
+        voiced = voiced_frames(audio)
+
+        def on_segment(seg) -> None:
+            snap_word_starts([seg], voiced)
+            emit("segment", seg)
+
         log.info("Transcribing %s (%.1f s) with %s", job.path, duration, job.model_id)
         segments, language = engine.transcribe(
             audio,
@@ -62,9 +78,10 @@ def run_job(job: Job, engine, emit) -> None:
             vad=job.vad,
             device=job.device,
             report=lambda stage, f: emit("stage", stage, f, ""),
-            on_segment=lambda seg: emit("segment", seg),
+            on_segment=on_segment,
             is_cancelled=never,
         )
+        snap_word_starts(segments, voiced)
         for s in segments:
             s.end = min(max(s.end, s.start), duration)
         emit("finished", Transcript(job.path, segments, language or job.language, duration, spec.name))
@@ -76,6 +93,19 @@ def run_job(job: Job, engine, emit) -> None:
     except Exception as e:
         log.exception("Transcription failed")
         emit("failed", f"{type(e).__name__}: {e}")
+
+
+def warm_up(job: Warmup, engine) -> None:
+    from dictify.catalog import get_model, is_downloaded, model_path
+
+    spec = get_model(job.model_id)
+    if not is_downloaded(spec):
+        return
+    try:
+        engine.warm(model_path(spec), device=job.device)
+        log.info("Model %s is loaded and ready", job.model_id)
+    except Exception:
+        log.warning("Could not preload model %s", job.model_id, exc_info=True)
 
 
 def _child_main(jobs, events, ui_language: str) -> None:
@@ -106,7 +136,10 @@ def _child_main(jobs, events, ui_language: str) -> None:
             return
         if engine is None:
             engine = create_engine()
-        run_job(job, engine, lambda *event: events.put(event))
+        if isinstance(job, Warmup):
+            warm_up(job, engine)
+        else:
+            run_job(job, engine, lambda *event: events.put(event))
 
 
 # ----- GUI side -----------------------------------------------------------------------------
@@ -126,24 +159,39 @@ class TranscribeService(QObject):
         self._jobs = None
         self._events = None
         self._busy = False
+        self._loaded: tuple | None = None  # (model_id, device) the process has or is loading
         self._timer = QTimer(self, interval=40, timeout=self._poll)
 
     def is_busy(self) -> bool:
         return self._busy
 
     def run(self, job: Job) -> None:
+        self._ensure_process()
+        self._busy = True
+        self._loaded = (job.model_id, job.device)
+        self._jobs.put(job)
+        self._timer.start()
+
+    def warm(self, model_id: str, device: str = "auto") -> None:
+        """Starts the process and loads the model in the background, so the next job
+        starts without the "Loading model…" wait. The loaded model costs memory, not CPU."""
+        if self._busy or self._loaded == (model_id, device):
+            return
+        self._ensure_process()
+        self._loaded = (model_id, device)
+        self._jobs.put(Warmup(model_id, device))
+
+    def _ensure_process(self) -> None:
         from dictify.i18n import current_language
 
         if self._proc is None or not self._proc.is_alive():
+            self._loaded = None
             self._jobs, self._events = self._ctx.Queue(), self._ctx.Queue()
             self._proc = self._ctx.Process(
                 target=_child_main, args=(self._jobs, self._events, current_language()), daemon=True
             )
             self._proc.start()
             log.info("Worker process %s started", self._proc.pid)
-        self._busy = True
-        self._jobs.put(job)
-        self._timer.start()
 
     def cancel(self) -> None:
         if not self._busy:
@@ -160,6 +208,7 @@ class TranscribeService(QObject):
         self._kill()
 
     def _kill(self) -> None:
+        self._loaded = None
         if self._proc is not None:
             self._proc.kill()
             self._proc.join(3)
